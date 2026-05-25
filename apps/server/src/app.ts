@@ -60,6 +60,14 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
   const app = Fastify({ logger: false });
   const rateLimitWindowMs = Number(process.env.MODELMULE_RATE_LIMIT_WINDOW_MS ?? 60_000);
   const rateLimitMaxRequests = Number(process.env.MODELMULE_RATE_LIMIT_MAX_REQUESTS ?? 120);
+  const routeRateLimit = {
+    config: {
+      rateLimit: {
+        max: rateLimitMaxRequests,
+        timeWindow: rateLimitWindowMs
+      }
+    }
+  } as const;
   await app.register(rateLimit, {
     global: true,
     hook: 'onRequest',
@@ -70,21 +78,21 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
 
   app.get('/health', async () => ({ status: 'ok' }));
 
-  app.get('/providers', async () => ({ providers: await service.listProviders() }));
-  app.get('/models', async () => ({ models: await service.listModels() }));
-  app.get('/usage', async () => service.getUsage());
+  app.get('/providers', routeRateLimit, async () => ({ providers: await service.listProviders() }));
+  app.get('/models', routeRateLimit, async () => ({ models: await service.listModels() }));
+  app.get('/usage', routeRateLimit, async () => service.getUsage());
 
-  app.post('/config/provider', async (_request, reply) => {
+  app.post('/config/provider', routeRateLimit, async (_request, reply) => {
     reply.code(501);
     return { message: 'Konfigurationsupdate per API folgt in späterer Version. Bitte modelmule config edit nutzen.' };
   });
 
-  app.post('/config/routing', async (_request, reply) => {
+  app.post('/config/routing', routeRateLimit, async (_request, reply) => {
     reply.code(501);
     return { message: 'Routing-Update per API folgt in späterer Version. Bitte modelmule config edit nutzen.' };
   });
 
-  app.post('/v1/chat/completions', async (request, reply) => {
+  app.post('/v1/chat/completions', routeRateLimit, async (request, reply) => {
     const body = request.body as {
       model?: string;
       messages?: ChatMessage[];
@@ -123,7 +131,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
     }
   });
 
-  app.post('/v1/code', async (request, reply) => {
+  app.post('/v1/code', routeRateLimit, async (request, reply) => {
     const body = request.body as {
       prompt?: string;
       model?: string;
