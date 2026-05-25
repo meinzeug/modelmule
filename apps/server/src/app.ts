@@ -84,12 +84,12 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
 
   app.post('/config/provider', routeRateLimit, async (_request, reply) => {
     reply.code(501);
-    return { message: 'Konfigurationsupdate per API folgt in späterer Version. Bitte modelmule config edit nutzen.' };
+    return { message: 'Provider configuration updates via API are not yet available. Use modelmule config edit.' };
   });
 
   app.post('/config/routing', routeRateLimit, async (_request, reply) => {
     reply.code(501);
-    return { message: 'Routing-Update per API folgt in späterer Version. Bitte modelmule config edit nutzen.' };
+    return { message: 'Routing updates via API are not yet available. Use modelmule config edit.' };
   });
 
   app.post('/v1/chat/completions', routeRateLimit, async (request, reply) => {
