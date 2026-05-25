@@ -1087,10 +1087,11 @@ function showToast(message) {
 
 async function api(path, options) {
   const token = localStorage.getItem('modelmule.apiKey') || '';
+  const hasBody = options && Object.prototype.hasOwnProperty.call(options, 'body');
   const response = await fetch(path, {
     ...options,
     headers: {
-      'content-type': 'application/json',
+      ...(hasBody ? { 'content-type': 'application/json' } : {}),
       ...(token ? { 'x-modelmule-api-key': token } : {}),
       ...(options && options.headers ? options.headers : {})
     }

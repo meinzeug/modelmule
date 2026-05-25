@@ -302,6 +302,35 @@ describe('openai compatible endpoint', () => {
     });
   });
 
+  it('deletes providers without requiring a JSON request body', async () => {
+    const providerId = 'delete_me_button_test';
+    const createResponse = await setup.app.inject({
+      method: 'POST',
+      url: '/config/provider',
+      payload: {
+        id: providerId,
+        provider: {
+          type: 'shell_command',
+          enabled: true,
+          command: '/bin/cat',
+          priority: 10,
+          models: ['delete-test-model'],
+          isLocal: true
+        }
+      }
+    });
+    expect(createResponse.statusCode).toBe(200);
+
+    const deleteResponse = await setup.app.inject({
+      method: 'DELETE',
+      url: `/config/provider/${providerId}`
+    });
+
+    expect(deleteResponse.statusCode).toBe(200);
+    const body = deleteResponse.json();
+    expect(body.config.providers[providerId]).toBeUndefined();
+  });
+
   it('connects Codex CLI by writing Codex config.toml', async () => {
     const response = await setup.app.inject({
       method: 'POST',
