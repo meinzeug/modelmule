@@ -39,7 +39,7 @@ abstract class BaseProvider implements ProviderRuntime {
   constructor(id: string, type: ProviderType, config: ProviderConfig) {
     this.id = id;
     this.type = type;
-    this.isLocal = config.isLocal ?? type === 'ollama' || type === 'shell_command';
+    this.isLocal = config.isLocal ?? (type === 'ollama' || type === 'shell_command');
     this.priority = config.priority;
     this.dailyBudgetUsd = config.dailyBudgetUsd;
     this.dailyRequestLimit = config.dailyRequestLimit;

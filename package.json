@@ -16,6 +16,7 @@
     "dev:cli": "pnpm --filter @modelmule/cli dev"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
     "@types/node": "24.10.1",
     "@types/supertest": "6.0.3",
     "supertest": "7.1.4",

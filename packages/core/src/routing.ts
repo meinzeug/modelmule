@@ -11,7 +11,8 @@ export class RoutingEngine {
 
   decide(taskType: TaskType, providers: Record<string, ProviderRuntime>): RouteDecision {
     const mode = this.resolveMode(taskType);
-    const preferred = this.config.routing.tasks[taskType]?.prefer ?? [];
+    const taskPreferences = this.config.routing.tasks as Record<string, { prefer?: string[] }>;
+    const preferred = taskPreferences[taskType]?.prefer ?? [];
     const providerIds = Object.keys(providers);
 
     const ranked: RankedProvider[] = providerIds.map((providerId) => {
@@ -68,6 +69,6 @@ export class RoutingEngine {
     if (taskType === 'premium-reasoning') {
       return 'premium';
     }
-    return this.config.routing.defaultMode;
+    return String(this.config.routing.defaultMode);
   }
 }

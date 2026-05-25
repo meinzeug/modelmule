@@ -48,7 +48,7 @@ const RoutingTaskSchema = z.object({
 const RoutingSchema = z.object({
   defaultMode: z.enum(['cheapest', 'balanced', 'premium', 'local-only', 'coding-max', 'free-first']).default('balanced'),
   privacyMode: z.boolean().default(false),
-  tasks: z.record(TaskTypeSchema, RoutingTaskSchema).partial().default({})
+  tasks: z.record(z.string(), RoutingTaskSchema).default({})
 });
 
 export const ModelMuleConfigSchema = z.object({
