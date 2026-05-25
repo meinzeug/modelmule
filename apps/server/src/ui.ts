@@ -15,6 +15,7 @@ export const dashboardHtml = `<!doctype html>
         </div>
         <nav aria-label="Dashboard sections">
           <a href="#providers">Providers</a>
+          <a href="#connections">Connections</a>
           <a href="#routing">Routing</a>
           <a href="#usage">Usage</a>
           <a href="#config">Config</a>
@@ -67,6 +68,75 @@ export const dashboardHtml = `<!doctype html>
               </select>
             </label>
             <button type="submit">Add provider</button>
+          </form>
+        </section>
+
+        <section id="connections" class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Accounts & consoles</p>
+              <h2>Connection Manager</h2>
+            </div>
+          </div>
+          <form id="connection-form" class="connection-form">
+            <label>
+              Provider ID
+              <input name="id" required pattern="[A-Za-z0-9_-]+" placeholder="openai_main" />
+            </label>
+            <label>
+              Type
+              <select name="type">
+                <option value="openai_compatible">OpenAI-compatible</option>
+                <option value="openrouter">OpenRouter</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="ollama">Ollama</option>
+                <option value="shell_command">Shell command / CLI</option>
+              </select>
+            </label>
+            <label>
+              API key env
+              <input name="apiKeyEnv" placeholder="OPENAI_API_KEY" />
+            </label>
+            <label>
+              Base URL
+              <input name="baseUrl" placeholder="https://api.openai.com/v1" />
+            </label>
+            <label>
+              Command
+              <input name="command" placeholder="codex" />
+            </label>
+            <label>
+              Args
+              <input name="args" placeholder="exec, -" />
+            </label>
+            <label>
+              Models
+              <input name="models" placeholder="gpt-4.1-mini, codex-cli" />
+            </label>
+            <label>
+              Priority
+              <input name="priority" type="number" min="0" max="100" value="50" />
+            </label>
+            <label>
+              Daily budget USD
+              <input name="dailyBudgetUsd" type="number" min="0" step="0.01" />
+            </label>
+            <label>
+              Daily request limit
+              <input name="dailyRequestLimit" type="number" min="1" step="1" />
+            </label>
+            <label>
+              Timeout ms
+              <input name="timeoutMs" type="number" min="1000" step="1000" />
+            </label>
+            <label class="checkbox-field">
+              <input name="isLocal" type="checkbox" />
+              Local provider
+            </label>
+            <div class="connection-actions">
+              <button type="submit">Save connection</button>
+              <button id="clear-connection-btn" class="secondary" type="button">Clear</button>
+            </div>
           </form>
         </section>
 
@@ -379,6 +449,37 @@ pre {
   font-size: 13px;
 }
 
+.connection-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.connection-form label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.connection-form .checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+}
+
+.checkbox-field input {
+  width: auto;
+  min-height: 0;
+}
+
+.connection-actions {
+  display: flex;
+  gap: 10px;
+}
+
 .output {
   border: 1px solid var(--line);
   background: #fff;
@@ -501,7 +602,9 @@ pre {
   .topbar,
   .actions,
   .inline-form,
-  .form-grid {
+  .form-grid,
+  .connection-form,
+  .connection-actions {
     display: grid;
     grid-template-columns: 1fr;
   }
@@ -518,6 +621,36 @@ const state = {
 };
 
 const $ = (selector) => document.querySelector(selector);
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function listValue(value) {
+  return Array.isArray(value) ? value.join(', ') : '';
+}
+
+function splitList(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function optionalString(value) {
+  const trimmed = String(value || '').trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function optionalNumber(value) {
+  const raw = String(value || '').trim();
+  return raw.length > 0 ? Number(raw) : undefined;
+}
 
 function showToast(message) {
   const toast = $('#toast');
@@ -560,23 +693,34 @@ function renderProviderList() {
     const healthy = health ? health.healthy : false;
     const models = Array.isArray(provider.models) && provider.models.length > 0 ? provider.models.join(', ') : 'dynamic';
     const command = provider.command ? provider.command + ' ' + (provider.args || []).join(' ') : '';
+    const account = provider.apiKeyEnv ? 'env: ' + provider.apiKeyEnv : provider.command ? 'cli: ' + provider.command : provider.baseUrl ? provider.baseUrl : 'local';
+    const score = health && health.capabilities ? health.capabilities.score : 'n/a';
     return [
       '<article class="provider-card">',
       '<div class="provider-title">',
-      '<strong>' + id + '</strong>',
+      '<strong>' + escapeHtml(id) + '</strong>',
       '<span class="badge ' + (healthy ? 'ok' : 'fail') + '">' + (healthy ? 'healthy' : 'check') + '</span>',
       '</div>',
       '<div class="provider-meta">',
-      '<span>type: ' + provider.type + '</span>',
-      '<span>priority: ' + provider.priority + '</span>',
-      '<span>models: ' + models + '</span>',
-      command ? '<span>command: ' + command + '</span>' : '',
-      health && health.message ? '<span>' + health.message + '</span>' : '',
+      '<span>account: ' + escapeHtml(account) + '</span>',
+      '<span>type: ' + escapeHtml(provider.type) + '</span>',
+      '<span>priority: ' + escapeHtml(provider.priority) + ' · score: ' + escapeHtml(score) + '</span>',
+      '<span>models: ' + escapeHtml(models) + '</span>',
+      command ? '<span>command: ' + escapeHtml(command) + '</span>' : '',
+      health && health.message ? '<span>' + escapeHtml(health.message) + '</span>' : '',
       '</div>',
+      '<button class="secondary" data-edit-provider="' + id + '" type="button">Edit connection</button>',
       '<button class="danger" data-delete-provider="' + id + '" type="button">Remove</button>',
       '</article>'
     ].join('');
   }).join('');
+
+  document.querySelectorAll('[data-edit-provider]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const id = button.getAttribute('data-edit-provider');
+      loadConnectionForm(id);
+    });
+  });
 
   document.querySelectorAll('[data-delete-provider]').forEach((button) => {
     button.addEventListener('click', async () => {
@@ -586,6 +730,57 @@ function renderProviderList() {
       await loadAll();
     });
   });
+}
+
+function loadConnectionForm(providerId) {
+  const config = state.configPayload ? state.configPayload.config : { providers: {} };
+  const provider = config.providers[providerId];
+  if (!provider) {
+    return;
+  }
+
+  const form = $('#connection-form');
+  form.elements.id.value = providerId;
+  form.elements.type.value = provider.type;
+  form.elements.apiKeyEnv.value = provider.apiKeyEnv || '';
+  form.elements.baseUrl.value = provider.baseUrl || '';
+  form.elements.command.value = provider.command || '';
+  form.elements.args.value = listValue(provider.args);
+  form.elements.models.value = listValue(provider.models);
+  form.elements.priority.value = provider.priority ?? 50;
+  form.elements.dailyBudgetUsd.value = provider.dailyBudgetUsd ?? '';
+  form.elements.dailyRequestLimit.value = provider.dailyRequestLimit ?? '';
+  form.elements.timeoutMs.value = provider.timeoutMs ?? '';
+  form.elements.isLocal.checked = Boolean(provider.isLocal);
+  document.location.hash = 'connections';
+}
+
+function providerFromConnectionForm(form) {
+  const type = String(form.elements.type.value || 'openai_compatible');
+  const provider = {
+    type,
+    priority: Number(form.elements.priority.value || 50),
+    models: splitList(form.elements.models.value)
+  };
+
+  const apiKeyEnv = optionalString(form.elements.apiKeyEnv.value);
+  const baseUrl = optionalString(form.elements.baseUrl.value);
+  const command = optionalString(form.elements.command.value);
+  const args = splitList(form.elements.args.value);
+  const dailyBudgetUsd = optionalNumber(form.elements.dailyBudgetUsd.value);
+  const dailyRequestLimit = optionalNumber(form.elements.dailyRequestLimit.value);
+  const timeoutMs = optionalNumber(form.elements.timeoutMs.value);
+
+  if (apiKeyEnv) provider.apiKeyEnv = apiKeyEnv;
+  if (baseUrl) provider.baseUrl = baseUrl;
+  if (command) provider.command = command;
+  if (args.length > 0) provider.args = args;
+  if (dailyBudgetUsd !== undefined) provider.dailyBudgetUsd = dailyBudgetUsd;
+  if (dailyRequestLimit !== undefined) provider.dailyRequestLimit = dailyRequestLimit;
+  if (timeoutMs !== undefined) provider.timeoutMs = timeoutMs;
+  if (form.elements.isLocal.checked) provider.isLocal = true;
+
+  return provider;
 }
 
 function renderProviderTemplateOptions() {
@@ -711,6 +906,26 @@ $('#provider-form').addEventListener('submit', async (event) => {
   event.currentTarget.reset();
   showToast('Provider added');
   await loadAll();
+});
+
+$('#connection-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const id = String(form.elements.id.value || '').trim();
+  await api('/config/provider', {
+    method: 'POST',
+    body: JSON.stringify({
+      id,
+      provider: providerFromConnectionForm(form)
+    })
+  });
+  showToast('Connection saved');
+  await loadAll();
+});
+
+$('#clear-connection-btn').addEventListener('click', () => {
+  $('#connection-form').reset();
+  $('#connection-form').elements.priority.value = 50;
 });
 
 $('#route-form').addEventListener('submit', async (event) => {

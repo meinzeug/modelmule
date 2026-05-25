@@ -66,7 +66,7 @@ function addProviderTemplate(rawType: string): void {
 }
 
 const program = new Command();
-program.name('modelmule').description('Local AI router for coding tools').version('0.4.0');
+program.name('modelmule').description('Local AI router for coding tools').version('0.5.0');
 
 program
   .command('init')

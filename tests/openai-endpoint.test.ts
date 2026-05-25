@@ -50,6 +50,7 @@ describe('openai compatible endpoint', () => {
     expect(response.statusCode).toBe(200);
     expect(response.headers['content-type']).toContain('text/html');
     expect(response.body).toContain('Provider Console');
+    expect(response.body).toContain('Connection Manager');
   });
 
   it('returns OpenAI style response with modelmule metadata', async () => {

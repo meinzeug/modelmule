@@ -4,6 +4,8 @@ ModelMule is a local compatibility layer for AI-enabled developer tools. It expo
 
 The project is intended for development environments where configuration, provider selection, usage visibility, and local privacy controls should be handled in one place.
 
+![ModelMule provider console](./docs/assets/modelmule-console.png)
+
 ## Status
 
 ModelMule is early-stage software. The current codebase provides a working local server, CLI, provider abstraction, routing engine, fallback behavior, and SQLite usage tracking.
@@ -27,6 +29,7 @@ ModelMule should only be used with services, credentials, models, and local comm
 
 - Local Fastify server on `http://127.0.0.1:43110`
 - Local web console at `http://127.0.0.1:43110/`
+- Connection manager for OpenAI-compatible APIs, OpenRouter, Anthropic, Ollama, Codex CLI, Claude CLI, and custom shell commands
 - OpenAI-compatible `POST /v1/chat/completions`
 - Simple coding helper endpoint at `POST /v1/code`
 - Provider support for OpenRouter, Ollama, OpenAI-compatible APIs, Anthropic, local shell commands, and CLI tools exposed through stdin/stdout
