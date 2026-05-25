@@ -62,37 +62,20 @@ export const dashboardHtml = `<!doctype html>
               <h2>Setup-Assistent</h2>
             </div>
           </div>
-          <form id="setup-wizard-form" class="setup-wizard-form">
-            <label>
-              1. Anbieter
-              <select name="presetId"></select>
-            </label>
-            <label>
-              Anzeigename
-              <input name="providerId" placeholder="wird automatisch gesetzt" />
-            </label>
-            <label>
-              API-Key, falls noetig
-              <input name="apiKey" type="password" placeholder="bei Ollama/LM Studio leer lassen" autocomplete="off" />
-            </label>
-            <label>
-              2. Routing
-              <select name="routingProfileId"></select>
-            </label>
-            <label>
-              3. Coding-AI
-              <select name="codingToolId"></select>
-            </label>
-            <button type="submit">Setup anwenden</button>
-          </form>
-          <div class="connection-help">
+          <div class="assistant-card">
+            <div>
+              <p class="muted">Der Assistent legt Anbieter, Modell-Routing und Coding-AI-Verbindung in einem gefuehrten Ablauf an.</p>
+              <div id="assistant-current-summary" class="assistant-summary"></div>
+            </div>
+            <button id="open-setup-wizard-btn" type="button">Assistent starten</button>
+          </div>
+          <div class="connection-help compact-help">
             <div>
               <p class="eyebrow">Fuer dein Coding-Tool</p>
               <p class="endpoint">http://127.0.0.1:43110/v1</p>
             </div>
             <button id="copy-endpoint-btn" class="secondary" type="button">Endpoint kopieren</button>
           </div>
-          <pre id="tool-command-output" class="output compact-output"></pre>
         </section>
 
         <section id="coding-ais" class="panel">
@@ -253,6 +236,77 @@ export const dashboardHtml = `<!doctype html>
         </section>
       </section>
     </main>
+    <div id="setup-modal" class="modal-backdrop" hidden>
+      <section class="wizard-modal" role="dialog" aria-modal="true" aria-labelledby="setup-modal-title">
+        <header class="wizard-header">
+          <div>
+            <p class="eyebrow">Setup-Assistent</p>
+            <h2 id="setup-modal-title">ModelMule Schritt fuer Schritt einrichten</h2>
+          </div>
+          <button id="close-setup-wizard-btn" class="secondary" type="button">Schliessen</button>
+        </header>
+        <div id="wizard-step-tabs" class="wizard-step-tabs" aria-label="Setup-Schritte"></div>
+        <form id="setup-wizard-form" class="wizard-form">
+          <section class="wizard-step-panel" data-wizard-panel="0">
+            <p class="eyebrow">Schritt 1</p>
+            <h3>KI-Anbieter waehlen</h3>
+            <p class="muted">Hier wird der Anbieter direkt angelegt. Du musst vorher nichts im Anbieter-Menue vorbereiten.</p>
+            <div class="wizard-fields two-columns">
+              <label>
+                Anbieter
+                <select name="presetId"></select>
+              </label>
+              <label>
+                Anzeigename
+                <input name="providerId" placeholder="wird automatisch gesetzt" />
+              </label>
+              <label class="wide-field">
+                API-Key, falls noetig
+                <input name="apiKey" type="password" placeholder="bei lokalen Anbietern leer lassen" autocomplete="off" />
+              </label>
+            </div>
+          </section>
+
+          <section class="wizard-step-panel" data-wizard-panel="1" hidden>
+            <p class="eyebrow">Schritt 2</p>
+            <h3>Coding-AI auswaehlen</h3>
+            <p class="muted">Die Coding-AI bekommt spaeter den lokalen ModelMule-Endpunkt. Ein echter Provider-Key gehoert nur zum KI-Anbieter aus Schritt 1.</p>
+            <div class="wizard-fields">
+              <label>
+                Coding-AI
+                <select name="codingToolId"></select>
+              </label>
+            </div>
+            <div id="wizard-tool-status" class="wizard-info-box"></div>
+          </section>
+
+          <section class="wizard-step-panel" data-wizard-panel="2" hidden>
+            <p class="eyebrow">Schritt 3</p>
+            <h3>Routing festlegen</h3>
+            <p class="muted">Dieses Profil entscheidet, ob ModelMule zuerst kostenlose, lokale oder staerkere Modelle nutzt.</p>
+            <div class="wizard-fields">
+              <label>
+                Routing-Profil
+                <select name="routingProfileId"></select>
+              </label>
+            </div>
+            <div id="wizard-profile-description" class="wizard-info-box"></div>
+          </section>
+
+          <section class="wizard-step-panel" data-wizard-panel="3" hidden>
+            <p class="eyebrow">Schritt 4</p>
+            <h3>Verbinden und testen</h3>
+            <p class="muted">Der Assistent speichert jetzt Anbieter, Modellpraeferenz und Tool-Zuweisung. Danach traegst du diese Werte in deiner Coding-AI ein.</p>
+            <pre id="tool-command-output" class="output compact-output"></pre>
+          </section>
+        </form>
+        <footer class="wizard-footer">
+          <button id="wizard-back-btn" class="secondary" type="button">Zurueck</button>
+          <button id="wizard-next-btn" type="button">Weiter</button>
+          <button id="wizard-apply-btn" type="button" hidden>Setup anwenden</button>
+        </footer>
+      </section>
+    </div>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="/ui/app.js"></script>
   </body>
@@ -438,18 +492,141 @@ pre {
   border-color: rgba(31, 122, 98, 0.35);
 }
 
-.setup-wizard-form {
+.assistant-card {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 8px;
+  padding: 14px;
   display: grid;
-  grid-template-columns: repeat(5, minmax(150px, 1fr)) auto;
-  gap: 10px;
-  align-items: end;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
 }
 
-.setup-wizard-form label {
+.assistant-summary {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.assistant-summary span {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.compact-help {
+  margin-top: 12px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: rgba(24, 48, 40, 0.54);
+  display: grid;
+  place-items: center;
+  padding: 22px;
+}
+
+.modal-backdrop[hidden] {
+  display: none;
+}
+
+.wizard-modal {
+  width: min(920px, 100%);
+  max-height: min(780px, calc(100vh - 44px));
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 24px 80px rgba(16, 30, 26, 0.32);
+  padding: 18px;
+  display: grid;
+  gap: 16px;
+}
+
+.wizard-header,
+.wizard-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.wizard-header h2,
+.wizard-step-panel h3 {
+  margin: 0;
+}
+
+.wizard-step-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.wizard-step-tab {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 8px;
+  padding: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.wizard-step-tab.active {
+  border-color: rgba(31, 122, 98, 0.45);
+  color: var(--ink);
+}
+
+.wizard-step-panel {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 10px;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.wizard-step-panel[hidden] {
+  display: none;
+}
+
+.wizard-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.wizard-fields.two-columns {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.wide-field {
+  grid-column: 1 / -1;
+}
+
+.wizard-fields label {
   display: grid;
   gap: 6px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.wizard-info-box {
+  border: 1px solid var(--line);
+  background: #fcfbf7;
+  border-radius: 8px;
+  padding: 12px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.wizard-info-box strong {
+  color: var(--ink);
 }
 
 .connection-help {
@@ -789,7 +966,10 @@ pre {
   .topbar,
   .start-layout,
   .setup-status-grid,
-  .setup-wizard-form,
+  .assistant-card,
+  .assistant-summary,
+  .wizard-step-tabs,
+  .wizard-fields.two-columns,
   .simple-provider-form,
   .provider-secret-form,
   .chat-form,
@@ -818,8 +998,16 @@ const state = {
   routingProfiles: {},
   toolAssignments: {},
   setupStatus: null,
-  providerPresets: []
+  providerPresets: [],
+  wizardStep: 0
 };
+
+const wizardSteps = [
+  'Anbieter',
+  'Coding-AI',
+  'Routing',
+  'Verbinden'
+];
 
 const defaultsByType = {
   openrouter: { baseUrl: 'https://openrouter.ai/api/v1', model: 'openrouter/auto', isLocal: false },
@@ -1040,19 +1228,60 @@ function renderConfig() {
   $('#config-output').textContent = JSON.stringify(state.configPayload.config, null, 2);
 }
 
+function selectedWizardTool() {
+  const form = $('#setup-wizard-form');
+  const toolId = String(form.elements.codingToolId.value || '');
+  return (state.codingAiTools || []).find((tool) => tool.id === toolId);
+}
+
+function selectedWizardProfile() {
+  const form = $('#setup-wizard-form');
+  const profileId = String(form.elements.routingProfileId.value || '');
+  return state.routingProfiles ? state.routingProfiles[profileId] : undefined;
+}
+
+function renderWizardStep() {
+  $('#wizard-step-tabs').innerHTML = wizardSteps.map((label, index) => {
+    return '<div class="wizard-step-tab ' + (index === state.wizardStep ? 'active' : '') + '">' + (index + 1) + '. ' + escapeHtml(label) + '</div>';
+  }).join('');
+
+  document.querySelectorAll('[data-wizard-panel]').forEach((panel) => {
+    panel.hidden = Number(panel.getAttribute('data-wizard-panel')) !== state.wizardStep;
+  });
+
+  $('#wizard-back-btn').hidden = state.wizardStep === 0;
+  $('#wizard-next-btn').hidden = state.wizardStep >= wizardSteps.length - 1;
+  $('#wizard-apply-btn').hidden = state.wizardStep < wizardSteps.length - 1;
+}
+
 function updateWizardHints() {
   const form = $('#setup-wizard-form');
-  if (!form) {
-    return;
-  }
   const presetId = String(form.elements.presetId.value || 'openrouter');
   const providerIdInput = form.elements.providerId;
   const apiKeyInput = form.elements.apiKey;
   const toolId = String(form.elements.codingToolId.value || '');
   const preset = (state.providerPresets || []).find((item) => item.id === presetId);
+  const tool = selectedWizardTool();
+  const profile = selectedWizardProfile();
 
   providerIdInput.placeholder = presetProviderId(presetId);
   apiKeyInput.placeholder = preset && preset.isLocal ? 'nicht noetig' : 'API-Key einfuegen oder leer lassen';
+
+  $('#wizard-tool-status').innerHTML = tool
+    ? [
+        '<strong>' + escapeHtml(tool.name) + '</strong>',
+        '<br>Installation: ' + (tool.installed ? 'gefunden' : 'noch nicht gefunden'),
+        '<br>Provider: ' + escapeHtml((tool.configuredProviders || []).join(', ') || 'wird beim Anwenden vorbereitet')
+      ].join('')
+    : 'Du kannst auch nur den Anbieter vorbereiten und die Coding-AI spaeter verbinden.';
+
+  $('#wizard-profile-description').innerHTML = profile
+    ? [
+        '<strong>' + escapeHtml(profile.name || 'Routing-Profil') + '</strong>',
+        '<br>' + escapeHtml(profile.description || ''),
+        '<br>Bezahlmodelle: ' + (profile.allowPaid === false ? 'Nein' : 'Ja')
+      ].join('')
+    : 'Waehle ein Profil aus.';
 
   const hints = clientEnvHintsByTool[toolId] || ['OPENAI_BASE_URL=http://127.0.0.1:43110/v1', 'OPENAI_API_KEY=modelmule'];
   $('#tool-command-output').textContent = [
@@ -1062,7 +1291,7 @@ function updateWizardHints() {
     '',
     'Als Umgebungsvariablen:',
     ...hints
-  ].join('\n');
+  ].join('\\n');
 }
 
 function renderSetupAssistant() {
@@ -1077,6 +1306,12 @@ function renderSetupAssistant() {
       '</div>'
     ].join('');
   }).join('');
+
+  $('#assistant-current-summary').innerHTML = [
+    '<span>Anbieter bereit: ' + escapeHtml((status.readyProviderIds || []).length) + '</span>',
+    '<span>Coding-AIs: ' + escapeHtml((status.connectedToolIds || []).length) + '</span>',
+    '<span>Routing-Profile: ' + escapeHtml(status.routingProfilesTotal || 0) + '</span>'
+  ].join('');
 
   const form = $('#setup-wizard-form');
   const currentPreset = form.elements.presetId.value || 'openrouter';
@@ -1100,6 +1335,7 @@ function renderSetupAssistant() {
   setSelectValue(form.elements.routingProfileId, currentProfile);
   setSelectValue(form.elements.codingToolId, currentTool);
   updateWizardHints();
+  renderWizardStep();
 }
 
 function renderModelCatalog() {
@@ -1420,9 +1656,8 @@ $('#simple-provider-form').addEventListener('submit', async (event) => {
   await loadAll();
 });
 
-$('#setup-wizard-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const form = event.currentTarget;
+async function applySetupWizard() {
+  const form = $('#setup-wizard-form');
   const providerId = optionalString(form.elements.providerId.value) || presetProviderId(String(form.elements.presetId.value || 'openrouter'));
   const apiKey = optionalString(form.elements.apiKey.value);
   const codingToolId = optionalString(form.elements.codingToolId.value);
@@ -1444,11 +1679,51 @@ $('#setup-wizard-form').addEventListener('submit', async (event) => {
 
   form.elements.apiKey.value = '';
   showToast('Setup angewendet');
+  closeSetupWizard();
   await loadAll();
+}
+
+function openSetupWizard() {
+  state.wizardStep = 0;
+  renderSetupAssistant();
+  $('#setup-modal').hidden = false;
+}
+
+function closeSetupWizard() {
+  $('#setup-modal').hidden = true;
+}
+
+$('#setup-wizard-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  await applySetupWizard();
+});
+
+$('#open-setup-wizard-btn').addEventListener('click', openSetupWizard);
+$('#close-setup-wizard-btn').addEventListener('click', closeSetupWizard);
+$('#setup-modal').addEventListener('click', (event) => {
+  if (event.target === event.currentTarget) {
+    closeSetupWizard();
+  }
+});
+
+$('#wizard-back-btn').addEventListener('click', () => {
+  state.wizardStep = Math.max(0, state.wizardStep - 1);
+  renderWizardStep();
+});
+
+$('#wizard-next-btn').addEventListener('click', () => {
+  state.wizardStep = Math.min(wizardSteps.length - 1, state.wizardStep + 1);
+  renderWizardStep();
+  updateWizardHints();
+});
+
+$('#wizard-apply-btn').addEventListener('click', async () => {
+  await applySetupWizard();
 });
 
 $('#setup-wizard-form select[name="presetId"]').addEventListener('change', updateWizardHints);
 $('#setup-wizard-form select[name="codingToolId"]').addEventListener('change', updateWizardHints);
+$('#setup-wizard-form select[name="routingProfileId"]').addEventListener('change', updateWizardHints);
 
 $('#copy-endpoint-btn').addEventListener('click', async () => {
   const endpoint = 'http://127.0.0.1:43110/v1';

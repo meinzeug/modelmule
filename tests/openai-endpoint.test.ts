@@ -55,6 +55,8 @@ describe('openai compatible endpoint', () => {
     expect(response.headers['content-type']).toContain('text/html');
     expect(response.body).toContain('Einfaches Setup');
     expect(response.body).toContain('Setup-Assistent');
+    expect(response.body).toContain('Assistent starten');
+    expect(response.body).toContain('ModelMule Schritt fuer Schritt einrichten');
     expect(response.body).toContain('Modelle verwalten');
     expect(response.body).toContain('Routing-Profile');
     expect(response.body).toContain('Coding AIs installieren und verbinden');
