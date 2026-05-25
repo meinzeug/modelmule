@@ -1,0 +1,18 @@
+{
+  "name": "@modelmule/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@modelmule/config": "workspace:*",
+    "@modelmule/core": "workspace:*",
+    "@modelmule/providers": "workspace:*",
+    "fastify": "5.8.5",
+    "zod": "3.24.1"
+  }
+}
