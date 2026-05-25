@@ -53,4 +53,26 @@ describe('openai compatible endpoint', () => {
     expect(body.choices[0].message.content).toContain('user: hello modelmule');
     expect(body.metadata.modelmule.usedProvider).toBe('shell_local');
   });
+
+  it('returns route preview without calling a provider', async () => {
+    const response = await setup.app.inject({
+      method: 'POST',
+      url: '/route/test',
+      payload: {
+        taskType: 'coding'
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.taskType).toBe('coding');
+    expect(body.selectedProvider).toBe('shell_local');
+    expect(body.providers).toEqual([
+      {
+        providerId: 'shell_local',
+        available: true,
+        reason: 'eligible'
+      }
+    ]);
+  });
 });

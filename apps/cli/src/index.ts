@@ -74,6 +74,36 @@ function addProviderTemplate(type: ProviderType): void {
         isLocal: true
       };
       break;
+    case 'openai_compatible':
+      id = 'openai_compatible_new';
+      config.providers[id] = {
+        type,
+        baseUrl: 'https://api.openai.com/v1',
+        apiKeyEnv: 'OPENAI_API_KEY',
+        priority: 75,
+        models: ['gpt-4.1-mini']
+      };
+      break;
+    case 'anthropic':
+      id = 'anthropic_new';
+      config.providers[id] = {
+        type,
+        apiKeyEnv: 'ANTHROPIC_API_KEY',
+        priority: 75,
+        models: ['claude-3-5-sonnet-latest']
+      };
+      break;
+    case 'shell_command':
+      id = 'shell_command_new';
+      config.providers[id] = {
+        type,
+        command: '/bin/cat',
+        args: [],
+        priority: 40,
+        models: ['shell-command-model'],
+        isLocal: true
+      };
+      break;
     default:
       throw new Error(`Unsupported provider add template: ${type}`);
   }
@@ -139,7 +169,7 @@ providerCmd
 providerCmd
   .command('add')
   .description('Add provider template')
-  .argument('<type>', 'openrouter | ollama')
+  .argument('<type>', 'openrouter | ollama | openai_compatible | anthropic | shell_command')
   .action((type: ProviderType) => {
     addProviderTemplate(type);
   });
@@ -205,16 +235,15 @@ program
   .command('route')
   .description('Routing tools')
   .command('test')
-  .argument('<prompt>', 'Prompt to test route decision with real call')
-  .action(async (prompt: string) => {
-    const payload = await callLocal('/v1/chat/completions', {
+  .argument('[taskType]', 'Task type to inspect, e.g. coding or local-private')
+  .action(async (taskType = 'coding') => {
+    const payload = await callLocal('/route/test', {
       method: 'POST',
       body: JSON.stringify({
-        taskType: 'coding',
-        messages: [{ role: 'user', content: prompt }]
+        taskType
       })
     });
-    printJson(payload.metadata?.modelmule ?? {});
+    printJson(payload);
   });
 
 program.parseAsync(process.argv).catch((error) => {

@@ -2,6 +2,7 @@
   "name": "modelmule",
   "private": true,
   "version": "0.1.0",
+  "type": "module",
   "description": "Local AI routing layer for coding tools",
   "packageManager": "pnpm@10.22.0",
   "engines": {

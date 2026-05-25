@@ -51,3 +51,14 @@ export interface RouteDecision {
   mode: string;
   taskType: TaskType;
 }
+
+export interface RoutePreviewProvider {
+  providerId: string;
+  available: boolean;
+  reason: 'eligible' | 'privacy-mode' | 'budget-limit-reached' | 'daily-request-limit-reached' | 'missing-provider';
+}
+
+export interface RoutePreview extends RouteDecision {
+  selectedProvider?: string;
+  providers: RoutePreviewProvider[];
+}

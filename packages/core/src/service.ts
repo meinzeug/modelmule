@@ -1,7 +1,7 @@
 import type { ModelMuleConfig, TaskType } from '@modelmule/config';
 import { RoutingEngine } from './routing.js';
 import { UsageStore } from './storage.js';
-import type { ChatRequest, ChatResponse, ProviderRuntime } from './types.js';
+import type { ChatRequest, ChatResponse, ProviderRuntime, RoutePreview, RoutePreviewProvider } from './types.js';
 
 export interface ServiceOptions {
   config: ModelMuleConfig;
@@ -55,26 +55,40 @@ export class ModelMuleService {
     return this.options.store.usageSummary();
   }
 
-  async chat(request: ChatRequest): Promise<RoutedChatResult> {
+  inspectRoute(request: Pick<ChatRequest, 'taskType'>): RoutePreview {
     const taskType = this.normalizeTaskType(request.taskType);
     const decision = this.routing.decide(taskType, this.options.providers);
-    const fallbackChain: string[] = [];
-    let firstProvider: string | undefined;
+    const providers: RoutePreviewProvider[] = [];
+    let selectedProvider: string | undefined;
 
     for (const providerId of decision.orderedProviders) {
       const provider = this.options.providers[providerId];
       if (!provider) {
+        providers.push({
+          providerId,
+          available: false,
+          reason: 'missing-provider'
+        });
         continue;
       }
 
       if (this.options.config.routing.privacyMode && !provider.isLocal) {
+        providers.push({
+          providerId,
+          available: false,
+          reason: 'privacy-mode'
+        });
         continue;
       }
 
       if (provider.dailyBudgetUsd !== undefined) {
         const usedCost = this.options.store.getDailyProviderCost(providerId);
         if (usedCost >= provider.dailyBudgetUsd) {
-          this.options.store.logRoutingEvent(taskType, providerId, undefined, 'budget-limit-reached');
+          providers.push({
+            providerId,
+            available: false,
+            reason: 'budget-limit-reached'
+          });
           continue;
         }
       }
@@ -82,9 +96,48 @@ export class ModelMuleService {
       if (provider.dailyRequestLimit !== undefined) {
         const usedRequests = this.options.store.getDailyProviderRequests(providerId);
         if (usedRequests >= provider.dailyRequestLimit) {
-          this.options.store.logRoutingEvent(taskType, providerId, undefined, 'daily-request-limit-reached');
+          providers.push({
+            providerId,
+            available: false,
+            reason: 'daily-request-limit-reached'
+          });
           continue;
         }
+      }
+
+      providers.push({
+        providerId,
+        available: true,
+        reason: 'eligible'
+      });
+      selectedProvider ??= providerId;
+    }
+
+    return {
+      ...decision,
+      selectedProvider,
+      providers
+    };
+  }
+
+  async chat(request: ChatRequest): Promise<RoutedChatResult> {
+    const preview = this.inspectRoute({ taskType: request.taskType });
+    const taskType = preview.taskType;
+    const fallbackChain: string[] = [];
+    let firstProvider: string | undefined;
+
+    for (const candidate of preview.providers) {
+      if (!candidate.available) {
+        if (candidate.reason === 'budget-limit-reached' || candidate.reason === 'daily-request-limit-reached') {
+          this.options.store.logRoutingEvent(taskType, candidate.providerId, undefined, candidate.reason);
+        }
+        continue;
+      }
+
+      const providerId = candidate.providerId;
+      const provider = this.options.providers[providerId];
+      if (!provider) {
+        continue;
       }
 
       firstProvider ??= providerId;

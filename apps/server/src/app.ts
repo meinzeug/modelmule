@@ -81,6 +81,25 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
   app.get('/providers', routeRateLimit, async () => ({ providers: await service.listProviders() }));
   app.get('/models', routeRateLimit, async () => ({ models: await service.listModels() }));
   app.get('/usage', routeRateLimit, async () => service.getUsage());
+  app.post('/route/test', routeRateLimit, async (request, reply) => {
+    const body = request.body as {
+      taskType?: string;
+    };
+
+    try {
+      return service.inspectRoute({
+        taskType: body?.taskType as any
+      });
+    } catch (error) {
+      reply.code(400);
+      return {
+        error: {
+          message: error instanceof Error ? error.message : String(error),
+          type: 'routing_error'
+        }
+      };
+    }
+  });
 
   app.post('/config/provider', routeRateLimit, async (_request, reply) => {
     reply.code(501);
