@@ -61,6 +61,8 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
   const rateLimitWindowMs = Number(process.env.MODELMULE_RATE_LIMIT_WINDOW_MS ?? 60_000);
   const rateLimitMaxRequests = Number(process.env.MODELMULE_RATE_LIMIT_MAX_REQUESTS ?? 120);
   await app.register(rateLimit, {
+    global: true,
+    hook: 'onRequest',
     max: rateLimitMaxRequests,
     timeWindow: rateLimitWindowMs,
     keyGenerator: (request) => request.ip
