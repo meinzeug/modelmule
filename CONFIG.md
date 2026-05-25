@@ -43,8 +43,8 @@ providers:
     type: openrouter
     apiKeyEnv: OPENROUTER_API_KEY
     dailyRequestLimit: 1000
-    dailyBudgetUsd: 2.0
-    priority: 80
+  dailyBudgetUsd: 2.0
+  priority: 80
     models:
       - openrouter/auto
 
@@ -54,6 +54,18 @@ providers:
     priority: 60
     models:
       - llama3.1:8b
+    isLocal: true
+
+  codex_local:
+    type: shell_command
+    command: codex
+    args:
+      - exec
+      - "-"
+    timeoutMs: 600000
+    priority: 65
+    models:
+      - codex-cli
     isLocal: true
 
 routing:
@@ -87,6 +99,7 @@ Provider IDs are local names. Keep them stable because usage data and routing ev
 - `models`: optional list of preferred or available models
 - `command`: required for `shell_command`
 - `args`: optional arguments for `shell_command`
+- `timeoutMs`: optional timeout for `shell_command` calls
 - `isLocal`: optional explicit local-provider flag
 
 Local budget and request limits are client-side controls. They do not replace provider-side billing, quota, or rate-limit enforcement.
@@ -142,6 +155,20 @@ Recommended local provider types:
 
 - `ollama`
 - `shell_command`
+
+## Provider Templates
+
+The CLI and local web console can add templates for common provider setups:
+
+- `openrouter`
+- `ollama`
+- `openai_compatible`
+- `anthropic`
+- `shell_command`
+- `codex_cli`
+- `claude_cli`
+
+`codex_cli` and `claude_cli` are stored as `shell_command` providers. The configured CLI must already be installed and authenticated by the operator.
 
 ## Operational Notes
 

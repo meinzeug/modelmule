@@ -37,6 +37,17 @@ afterAll(async () => {
 });
 
 describe('openai compatible endpoint', () => {
+  it('serves the local dashboard', async () => {
+    const response = await setup.app.inject({
+      method: 'GET',
+      url: '/'
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/html');
+    expect(response.body).toContain('Provider Console');
+  });
+
   it('returns OpenAI style response with modelmule metadata', async () => {
     const response = await setup.app.inject({
       method: 'POST',
@@ -74,5 +85,25 @@ describe('openai compatible endpoint', () => {
         reason: 'eligible'
       }
     ]);
+  });
+
+  it('adds codex CLI as a shell command provider preset', async () => {
+    const response = await setup.app.inject({
+      method: 'POST',
+      url: '/config/provider',
+      payload: {
+        id: 'codex_local',
+        type: 'codex_cli'
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.config.providers.codex_local).toMatchObject({
+      type: 'shell_command',
+      command: 'codex',
+      args: ['exec', '-'],
+      isLocal: true
+    });
   });
 });

@@ -295,12 +295,14 @@ class AnthropicProvider extends BaseProvider {
 class ShellCommandProvider extends BaseProvider {
   private readonly command?: string;
   private readonly args: string[];
+  private readonly timeoutMs: number;
   private readonly configuredModels: string[];
 
   constructor(id: string, config: ProviderConfig) {
     super(id, 'shell_command', config);
     this.command = config.command;
     this.args = config.args ?? [];
+    this.timeoutMs = config.timeoutMs ?? 120_000;
     this.configuredModels = config.models;
   }
 
@@ -327,6 +329,24 @@ class ShellCommandProvider extends BaseProvider {
 
       let stdout = '';
       let stderr = '';
+      let settled = false;
+      const timeout = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        child.kill('SIGTERM');
+        reject(new Error(`Shell command timed out after ${this.timeoutMs}ms`));
+      }, this.timeoutMs);
+
+      const finish = (callback: () => void) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        callback();
+      };
 
       child.stdout.on('data', (chunk) => {
         stdout += String(chunk);
@@ -334,13 +354,17 @@ class ShellCommandProvider extends BaseProvider {
       child.stderr.on('data', (chunk) => {
         stderr += String(chunk);
       });
-      child.on('error', reject);
+      child.on('error', (error) => {
+        finish(() => reject(error));
+      });
       child.on('close', (code) => {
-        if (code !== 0) {
-          reject(new Error(`Shell command exited with ${code}: ${stderr.trim()}`));
-          return;
-        }
-        resolve(stdout.trim() || stderr.trim());
+        finish(() => {
+          if (code !== 0) {
+            reject(new Error(`Shell command exited with ${code}: ${stderr.trim()}`));
+            return;
+          }
+          resolve(stdout.trim() || stderr.trim());
+        });
       });
 
       child.stdin.write(prompt);

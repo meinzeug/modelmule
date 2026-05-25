@@ -22,6 +22,7 @@ All providers must be used according to their own terms, credentials, quotas, an
 - `isLocal`: optional explicit local-provider flag
 - `apiKeyEnv`: optional environment variable name for API keys
 - `baseUrl`: optional provider base URL
+- `timeoutMs`: optional timeout for shell command providers
 
 ## OpenRouter
 
@@ -112,6 +113,7 @@ local_command:
   type: shell_command
   command: /bin/cat
   args: []
+  timeoutMs: 120000
   priority: 40
   isLocal: true
   models:
@@ -122,8 +124,50 @@ Notes:
 
 - `command` is required.
 - The command receives the prompt on stdin.
+- Stdout is returned as the assistant response.
+- Non-zero exits are treated as provider errors and can trigger fallback.
+- `timeoutMs` defaults to `120000`.
 - Shell command providers are treated as local by default.
 - Only configure commands that are safe and appropriate for your environment.
+
+## Codex CLI Template
+
+The `codex_cli` template creates a `shell_command` provider:
+
+```yaml
+codex_local:
+  type: shell_command
+  command: codex
+  args:
+    - exec
+    - "-"
+  timeoutMs: 600000
+  priority: 65
+  isLocal: true
+  models:
+    - codex-cli
+```
+
+The prompt is sent to stdin. The template expects the local `codex` command to be installed and already authenticated by the operator.
+
+## Claude CLI Template
+
+The `claude_cli` template creates a `shell_command` provider:
+
+```yaml
+claude_local:
+  type: shell_command
+  command: claude
+  args:
+    - -p
+  timeoutMs: 600000
+  priority: 65
+  isLocal: true
+  models:
+    - claude-cli
+```
+
+The prompt is sent to stdin. The template expects the local `claude` command to be installed and already authenticated by the operator.
 
 ## Health Checks
 

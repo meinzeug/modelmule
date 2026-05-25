@@ -42,6 +42,8 @@ modelmule providers add ollama
 modelmule providers add openai_compatible
 modelmule providers add anthropic
 modelmule providers add shell_command
+modelmule providers add codex_cli
+modelmule providers add claude_cli
 ```
 
 Check provider health:
@@ -76,6 +78,12 @@ modelmule config edit
 ```
 
 ## API
+
+Local web console:
+
+```text
+http://127.0.0.1:43110/
+```
 
 Health check:
 
@@ -165,4 +173,47 @@ Then inspect the route:
 
 ```bash
 modelmule route test coding
+```
+
+## CLI Provider Example
+
+Codex CLI over stdin/stdout:
+
+```yaml
+providers:
+  codex_local:
+    type: shell_command
+    command: codex
+    args:
+      - exec
+      - "-"
+    timeoutMs: 600000
+    priority: 65
+    isLocal: true
+    models:
+      - codex-cli
+
+routing:
+  defaultMode: balanced
+  privacyMode: false
+  tasks:
+    coding:
+      prefer:
+        - codex_local
+```
+
+Claude CLI over stdin/stdout:
+
+```yaml
+providers:
+  claude_local:
+    type: shell_command
+    command: claude
+    args:
+      - -p
+    timeoutMs: 600000
+    priority: 65
+    isLocal: true
+    models:
+      - claude-cli
 ```

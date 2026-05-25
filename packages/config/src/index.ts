@@ -20,7 +20,7 @@ export const TaskTypeSchema = z.enum([
 
 export type TaskType = z.infer<typeof TaskTypeSchema>;
 
-const ProviderTypeSchema = z.enum([
+export const ProviderTypeSchema = z.enum([
   'openrouter',
   'ollama',
   'openai_compatible',
@@ -28,7 +28,17 @@ const ProviderTypeSchema = z.enum([
   'shell_command'
 ]);
 
-const ProviderSchema = z.object({
+export const ProviderTemplateTypeSchema = z.enum([
+  'openrouter',
+  'ollama',
+  'openai_compatible',
+  'anthropic',
+  'shell_command',
+  'codex_cli',
+  'claude_cli'
+]);
+
+export const ProviderConfigSchema = z.object({
   type: ProviderTypeSchema,
   apiKeyEnv: z.string().optional(),
   baseUrl: z.string().optional(),
@@ -38,31 +48,98 @@ const ProviderSchema = z.object({
   models: z.array(z.string()).default([]),
   command: z.string().optional(),
   args: z.array(z.string()).optional(),
+  timeoutMs: z.number().int().positive().optional(),
   isLocal: z.boolean().optional()
 });
 
-const RoutingTaskSchema = z.object({
+export const RoutingTaskConfigSchema = z.object({
   prefer: z.array(z.string()).default([])
 });
 
-const RoutingSchema = z.object({
+export const RoutingConfigSchema = z.object({
   defaultMode: z.enum(['cheapest', 'balanced', 'premium', 'local-only', 'coding-max', 'free-first']).default('balanced'),
   privacyMode: z.boolean().default(false),
-  tasks: z.record(z.string(), RoutingTaskSchema).default({})
+  tasks: z.record(z.string(), RoutingTaskConfigSchema).default({})
 });
 
 export const ModelMuleConfigSchema = z.object({
-  providers: z.record(z.string(), ProviderSchema),
-  routing: RoutingSchema.default({ defaultMode: 'balanced', privacyMode: false, tasks: {} })
+  providers: z.record(z.string(), ProviderConfigSchema),
+  routing: RoutingConfigSchema.default({ defaultMode: 'balanced', privacyMode: false, tasks: {} })
 });
 
-export type ProviderConfig = z.infer<typeof ProviderSchema>;
+export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
 export type ProviderType = z.infer<typeof ProviderTypeSchema>;
-export type RoutingConfig = z.infer<typeof RoutingSchema>;
+export type ProviderTemplateType = z.infer<typeof ProviderTemplateTypeSchema>;
+export type RoutingConfig = z.infer<typeof RoutingConfigSchema>;
 export type ModelMuleConfig = z.infer<typeof ModelMuleConfigSchema>;
 
 export const DEFAULT_CONFIG_PATH = join(homedir(), '.modelmule', 'config.yaml');
 export const DEFAULT_DB_PATH = join(homedir(), '.modelmule', 'modelmule.db');
+
+export function providerTemplate(type: ProviderTemplateType): ProviderConfig {
+  switch (type) {
+    case 'openrouter':
+      return {
+        type,
+        apiKeyEnv: 'OPENROUTER_API_KEY',
+        priority: 70,
+        models: ['openrouter/auto']
+      };
+    case 'ollama':
+      return {
+        type,
+        baseUrl: 'http://127.0.0.1:11434',
+        priority: 60,
+        models: ['llama3.1:8b'],
+        isLocal: true
+      };
+    case 'openai_compatible':
+      return {
+        type,
+        baseUrl: 'https://api.openai.com/v1',
+        apiKeyEnv: 'OPENAI_API_KEY',
+        priority: 75,
+        models: ['gpt-4.1-mini']
+      };
+    case 'anthropic':
+      return {
+        type,
+        apiKeyEnv: 'ANTHROPIC_API_KEY',
+        priority: 75,
+        models: ['claude-3-5-sonnet-latest']
+      };
+    case 'shell_command':
+      return {
+        type,
+        command: '/bin/cat',
+        args: [],
+        timeoutMs: 120_000,
+        priority: 40,
+        models: ['shell-command-model'],
+        isLocal: true
+      };
+    case 'codex_cli':
+      return {
+        type: 'shell_command',
+        command: 'codex',
+        args: ['exec', '-'],
+        timeoutMs: 600_000,
+        priority: 65,
+        models: ['codex-cli'],
+        isLocal: true
+      };
+    case 'claude_cli':
+      return {
+        type: 'shell_command',
+        command: 'claude',
+        args: ['-p'],
+        timeoutMs: 600_000,
+        priority: 65,
+        models: ['claude-cli'],
+        isLocal: true
+      };
+  }
+}
 
 export const defaultConfig = (): ModelMuleConfig => ({
   providers: {

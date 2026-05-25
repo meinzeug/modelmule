@@ -7,9 +7,10 @@ import {
   defaultConfig,
   initConfig,
   loadConfig,
+  providerTemplate,
+  ProviderTemplateTypeSchema,
   resolveConfigPath,
   saveConfig,
-  type ProviderType
 } from '@modelmule/config';
 
 const host = process.env.MODELMULE_HOST ?? '127.0.0.1';
@@ -50,70 +51,18 @@ async function serveAction(): Promise<void> {
   console.log(`ModelMule server listening on ${baseUrl}`);
 }
 
-function addProviderTemplate(type: ProviderType): void {
+function addProviderTemplate(rawType: string): void {
+  const type = ProviderTemplateTypeSchema.parse(rawType);
   const config = loadConfig();
-  let id: string;
-
-  switch (type) {
-    case 'openrouter':
-      id = 'openrouter_new';
-      config.providers[id] = {
-        type,
-        apiKeyEnv: 'OPENROUTER_API_KEY',
-        priority: 70,
-        models: ['openrouter/auto']
-      };
-      break;
-    case 'ollama':
-      id = 'ollama_new';
-      config.providers[id] = {
-        type,
-        baseUrl: 'http://127.0.0.1:11434',
-        priority: 60,
-        models: ['llama3.1:8b'],
-        isLocal: true
-      };
-      break;
-    case 'openai_compatible':
-      id = 'openai_compatible_new';
-      config.providers[id] = {
-        type,
-        baseUrl: 'https://api.openai.com/v1',
-        apiKeyEnv: 'OPENAI_API_KEY',
-        priority: 75,
-        models: ['gpt-4.1-mini']
-      };
-      break;
-    case 'anthropic':
-      id = 'anthropic_new';
-      config.providers[id] = {
-        type,
-        apiKeyEnv: 'ANTHROPIC_API_KEY',
-        priority: 75,
-        models: ['claude-3-5-sonnet-latest']
-      };
-      break;
-    case 'shell_command':
-      id = 'shell_command_new';
-      config.providers[id] = {
-        type,
-        command: '/bin/cat',
-        args: [],
-        priority: 40,
-        models: ['shell-command-model'],
-        isLocal: true
-      };
-      break;
-    default:
-      throw new Error(`Unsupported provider add template: ${type}`);
-  }
+  const id = `${type}_new`;
+  config.providers[id] = providerTemplate(type);
 
   const path = saveConfig(config);
   console.log(`Provider template '${id}' added in ${path}`);
 }
 
 const program = new Command();
-program.name('modelmule').description('Local AI router for coding tools').version('0.1.0');
+program.name('modelmule').description('Local AI router for coding tools').version('0.2.0');
 
 program
   .command('init')
@@ -169,8 +118,8 @@ providerCmd
 providerCmd
   .command('add')
   .description('Add provider template')
-  .argument('<type>', 'openrouter | ollama | openai_compatible | anthropic | shell_command')
-  .action((type: ProviderType) => {
+  .argument('<type>', 'openrouter | ollama | openai_compatible | anthropic | shell_command | codex_cli | claude_cli')
+  .action((type: string) => {
     addProviderTemplate(type);
   });
 

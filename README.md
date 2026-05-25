@@ -26,9 +26,10 @@ ModelMule should only be used with services, credentials, models, and local comm
 ## Features
 
 - Local Fastify server on `http://127.0.0.1:43110`
+- Local web console at `http://127.0.0.1:43110/`
 - OpenAI-compatible `POST /v1/chat/completions`
 - Simple coding helper endpoint at `POST /v1/code`
-- Provider support for OpenRouter, Ollama, OpenAI-compatible APIs, Anthropic, and local shell commands
+- Provider support for OpenRouter, Ollama, OpenAI-compatible APIs, Anthropic, local shell commands, and CLI tools exposed through stdin/stdout
 - Routing by task type, provider priority, privacy mode, daily budget, and daily request limits
 - Provider fallback when an eligible provider call fails
 - Route preview endpoint for diagnostics
@@ -57,6 +58,12 @@ Start the local server:
 pnpm --filter @modelmule/cli dev serve
 ```
 
+Open the local console:
+
+```text
+http://127.0.0.1:43110/
+```
+
 Use the local OpenAI-compatible base URL:
 
 ```text
@@ -73,6 +80,12 @@ Available endpoints:
 - `GET /providers`
 - `GET /models`
 - `GET /usage`
+- `GET /config`
+- `PUT /config`
+- `POST /config/provider`
+- `DELETE /config/provider/:id`
+- `POST /config/routing`
+- `POST /config/reload`
 - `POST /route/test`
 - `POST /v1/chat/completions`
 - `POST /v1/code`
@@ -109,6 +122,8 @@ modelmule providers add ollama
 modelmule providers add openai_compatible
 modelmule providers add anthropic
 modelmule providers add shell_command
+modelmule providers add codex_cli
+modelmule providers add claude_cli
 modelmule providers test
 modelmule models list
 modelmule usage
@@ -141,6 +156,11 @@ Supported provider types:
 - `openai_compatible`
 - `anthropic`
 - `shell_command`
+
+Provider templates also include:
+
+- `codex_cli`
+- `claude_cli`
 
 Provider-specific details are documented in [PROVIDERS.md](./PROVIDERS.md).
 

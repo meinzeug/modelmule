@@ -49,6 +49,12 @@ Default address:
 http://127.0.0.1:43110
 ```
 
+Local web console:
+
+```text
+http://127.0.0.1:43110/
+```
+
 ## Build
 
 ```bash
@@ -81,6 +87,8 @@ export ANTHROPIC_API_KEY=...
 ```
 
 Local providers such as Ollama must be running separately before ModelMule can call them.
+
+CLI providers such as Codex CLI or Claude CLI must be installed and authenticated separately before ModelMule can call them through stdin/stdout.
 
 ## Troubleshooting
 

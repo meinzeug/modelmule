@@ -1,8 +1,19 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
-import { loadConfig } from '@modelmule/config';
+import {
+  loadConfig,
+  ModelMuleConfigSchema,
+  ProviderConfigSchema,
+  ProviderTemplateTypeSchema,
+  providerTemplate,
+  resolveConfigPath,
+  RoutingConfigSchema,
+  saveConfig,
+  type ModelMuleConfig
+} from '@modelmule/config';
 import { ModelMuleService, UsageStore, type ChatMessage } from '@modelmule/core';
 import { createProvider } from '@modelmule/providers';
+import { dashboardCss, dashboardHtml, dashboardJs } from './ui.js';
 
 function toOpenAIResponse(input: {
   id: string;
@@ -48,16 +59,45 @@ export interface BuildServerOptions {
   dbPath?: string;
 }
 
-export async function buildServer(options: BuildServerOptions = {}): Promise<{ app: FastifyInstance; service: ModelMuleService }> {
-  const config = loadConfig(options.configPath);
-  const store = new UsageStore(options.dbPath);
+const providerIdPattern = /^[A-Za-z0-9_-]+$/;
 
+function createService(config: ModelMuleConfig, store: UsageStore): ModelMuleService {
   const providers = Object.fromEntries(
     Object.entries(config.providers).map(([providerId, providerConfig]) => [providerId, createProvider(providerId, providerConfig)])
   );
 
-  const service = new ModelMuleService({ config, providers, store });
+  return new ModelMuleService({ config, providers, store });
+}
+
+function validationError(error: unknown) {
+  return {
+    error: {
+      message: error instanceof Error ? error.message : String(error),
+      type: 'validation_error'
+    }
+  };
+}
+
+export async function buildServer(options: BuildServerOptions = {}): Promise<{ app: FastifyInstance; service: ModelMuleService }> {
+  const configPath = resolveConfigPath(options.configPath);
+  let config = loadConfig(options.configPath);
+  const store = new UsageStore(options.dbPath);
+  let service = createService(config, store);
   const app = Fastify({ logger: false });
+
+  function applyConfig(nextConfig: ModelMuleConfig): ModelMuleConfig {
+    config = ModelMuleConfigSchema.parse(nextConfig);
+    saveConfig(config, options.configPath);
+    service = createService(config, store);
+    return config;
+  }
+
+  function reloadConfig(): ModelMuleConfig {
+    config = loadConfig(options.configPath);
+    service = createService(config, store);
+    return config;
+  }
+
   const rateLimitWindowMs = Number(process.env.MODELMULE_RATE_LIMIT_WINDOW_MS ?? 60_000);
   const rateLimitMaxRequests = Number(process.env.MODELMULE_RATE_LIMIT_MAX_REQUESTS ?? 120);
   const routeRateLimit = {
@@ -76,11 +116,51 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
     keyGenerator: (request) => request.ip
   });
 
+  app.get('/', async (_request, reply) => {
+    reply.type('text/html; charset=utf-8');
+    return dashboardHtml;
+  });
+
+  app.get('/ui', async (_request, reply) => {
+    reply.type('text/html; charset=utf-8');
+    return dashboardHtml;
+  });
+
+  app.get('/ui/styles.css', async (_request, reply) => {
+    reply.type('text/css; charset=utf-8');
+    return dashboardCss;
+  });
+
+  app.get('/ui/app.js', async (_request, reply) => {
+    reply.type('application/javascript; charset=utf-8');
+    return dashboardJs;
+  });
+
   app.get('/health', async () => ({ status: 'ok' }));
 
   app.get('/providers', routeRateLimit, async () => ({ providers: await service.listProviders() }));
   app.get('/models', routeRateLimit, async () => ({ models: await service.listModels() }));
   app.get('/usage', routeRateLimit, async () => service.getUsage());
+  app.get('/config', routeRateLimit, async () => ({ path: configPath, config }));
+  app.put('/config', routeRateLimit, async (request, reply) => {
+    try {
+      const nextConfig = ModelMuleConfigSchema.parse(request.body);
+      return { path: configPath, config: applyConfig(nextConfig) };
+    } catch (error) {
+      reply.code(400);
+      return validationError(error);
+    }
+  });
+
+  app.post('/config/reload', routeRateLimit, async (_request, reply) => {
+    try {
+      return { path: configPath, config: reloadConfig() };
+    } catch (error) {
+      reply.code(400);
+      return validationError(error);
+    }
+  });
+
   app.post('/route/test', routeRateLimit, async (request, reply) => {
     const body = request.body as {
       taskType?: string;
@@ -101,14 +181,97 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
     }
   });
 
-  app.post('/config/provider', routeRateLimit, async (_request, reply) => {
-    reply.code(501);
-    return { message: 'Provider configuration updates via API are not yet available. Use modelmule config edit.' };
+  app.post('/config/provider', routeRateLimit, async (request, reply) => {
+    const body = request.body as {
+      id?: string;
+      type?: unknown;
+      provider?: unknown;
+    };
+
+    try {
+      const id = String(body?.id ?? '').trim();
+      if (!providerIdPattern.test(id)) {
+        throw new Error('Provider id must contain only letters, numbers, underscores, and dashes');
+      }
+
+      const provider = body.provider
+        ? ProviderConfigSchema.parse(body.provider)
+        : providerTemplate(ProviderTemplateTypeSchema.parse(body.type));
+
+      return {
+        path: configPath,
+        config: applyConfig({
+          ...config,
+          providers: {
+            ...config.providers,
+            [id]: provider
+          }
+        })
+      };
+    } catch (error) {
+      reply.code(400);
+      return validationError(error);
+    }
   });
 
-  app.post('/config/routing', routeRateLimit, async (_request, reply) => {
-    reply.code(501);
-    return { message: 'Routing updates via API are not yet available. Use modelmule config edit.' };
+  app.delete('/config/provider/:id', routeRateLimit, async (request, reply) => {
+    const params = request.params as { id?: string };
+
+    try {
+      const id = String(params.id ?? '').trim();
+      if (!providerIdPattern.test(id)) {
+        throw new Error('Provider id must contain only letters, numbers, underscores, and dashes');
+      }
+      if (!config.providers[id]) {
+        reply.code(404);
+        return {
+          error: {
+            message: `Provider '${id}' does not exist`,
+            type: 'not_found'
+          }
+        };
+      }
+
+      const providers = { ...config.providers };
+      delete providers[id];
+      const tasks = Object.fromEntries(
+        Object.entries(config.routing.tasks).map(([taskType, taskConfig]) => [
+          taskType,
+          { prefer: taskConfig.prefer.filter((providerId) => providerId !== id) }
+        ])
+      );
+
+      return {
+        path: configPath,
+        config: applyConfig({
+          ...config,
+          providers,
+          routing: {
+            ...config.routing,
+            tasks
+          }
+        })
+      };
+    } catch (error) {
+      reply.code(400);
+      return validationError(error);
+    }
+  });
+
+  app.post('/config/routing', routeRateLimit, async (request, reply) => {
+    try {
+      const routing = RoutingConfigSchema.parse(request.body);
+      return {
+        path: configPath,
+        config: applyConfig({
+          ...config,
+          routing
+        })
+      };
+    } catch (error) {
+      reply.code(400);
+      return validationError(error);
+    }
   });
 
   app.post('/v1/chat/completions', routeRateLimit, async (request, reply) => {
