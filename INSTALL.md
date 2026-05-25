@@ -113,3 +113,5 @@ If provider calls fail, run:
 modelmule providers test
 modelmule route test coding
 ```
+
+If a config change breaks startup or routing, inspect the local backup directory next to `config.yaml` or use the web console backup list after the server starts with a valid config.

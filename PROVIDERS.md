@@ -175,11 +175,23 @@ The `modelmule providers test` command calls provider health checks through the 
 
 Health checks are best-effort diagnostics. A healthy response means the runtime can perform its configured check, not that every future model request is guaranteed to succeed.
 
+Shell command providers verify that the configured command is available on `PATH` or as an executable path. They do not run a model request during health checks.
+
 ## Model Listing
 
 Model lists are sourced from provider configuration when `models` is set. Some providers can query their remote or local API when no static model list is configured.
 
 Prefer explicit `models` lists for predictable local behavior.
+
+## Capability Metadata
+
+The local API exposes provider and routing capabilities through:
+
+```text
+GET /capabilities
+```
+
+This includes provider types, provider templates, routing modes, and task types. GUI clients should prefer this endpoint over hard-coded option lists.
 
 ## Adding Provider Types
 

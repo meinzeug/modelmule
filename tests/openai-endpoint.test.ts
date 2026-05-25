@@ -65,6 +65,52 @@ describe('openai compatible endpoint', () => {
     expect(body.metadata.modelmule.usedProvider).toBe('shell_local');
   });
 
+  it('returns provider capability metadata', async () => {
+    const response = await setup.app.inject({
+      method: 'GET',
+      url: '/capabilities'
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.providerTemplates).toContain('codex_cli');
+    expect(body.providerTemplates).toContain('claude_cli');
+    expect(body.taskTypes).toContain('coding');
+    expect(body.routingModes).toContain('balanced');
+  });
+
+  it('returns provider diagnostics with local metadata', async () => {
+    const response = await setup.app.inject({
+      method: 'GET',
+      url: '/providers'
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.providers[0]).toMatchObject({
+      id: 'shell_local',
+      type: 'shell_command',
+      healthy: true,
+      isLocal: true,
+      priority: 90
+    });
+  });
+
+  it('rejects invalid chat requests with structured errors', async () => {
+    const response = await setup.app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        messages: []
+      }
+    });
+
+    expect(response.statusCode).toBe(400);
+    const body = response.json();
+    expect(body.error.type).toBe('invalid_request');
+    expect(Array.isArray(body.error.details)).toBe(true);
+  });
+
   it('returns route preview without calling a provider', async () => {
     const response = await setup.app.inject({
       method: 'POST',
@@ -105,5 +151,17 @@ describe('openai compatible endpoint', () => {
       args: ['exec', '-'],
       isLocal: true
     });
+  });
+
+  it('creates a config backup before server-side config writes', async () => {
+    const response = await setup.app.inject({
+      method: 'GET',
+      url: '/config/backups'
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.backups.length).toBeGreaterThan(0);
+    expect(body.backups[0].name).toMatch(/^config\..+\.yaml$/);
   });
 });

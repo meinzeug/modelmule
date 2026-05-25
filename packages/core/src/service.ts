@@ -25,7 +25,18 @@ export class ModelMuleService {
     }
   }
 
-  async listProviders(): Promise<Array<{ id: string; type: string; healthy: boolean; message?: string }>> {
+  async listProviders(): Promise<
+    Array<{
+      id: string;
+      type: string;
+      healthy: boolean;
+      isLocal: boolean;
+      priority: number;
+      dailyBudgetUsd?: number;
+      dailyRequestLimit?: number;
+      message?: string;
+    }>
+  > {
     const entries = Object.entries(this.options.providers);
     const result = await Promise.all(
       entries.map(async ([id, provider]) => {
@@ -33,7 +44,16 @@ export class ModelMuleService {
           healthy: false,
           message: error instanceof Error ? error.message : String(error)
         }));
-        return { id, type: provider.type, healthy: health.healthy, message: health.message };
+        return {
+          id,
+          type: provider.type,
+          healthy: health.healthy,
+          isLocal: provider.isLocal,
+          priority: provider.priority,
+          dailyBudgetUsd: provider.dailyBudgetUsd,
+          dailyRequestLimit: provider.dailyRequestLimit,
+          message: health.message
+        };
       })
     );
     return result;

@@ -1,14 +1,21 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
+import { z, ZodError } from 'zod';
 import {
+  createConfigBackup,
+  listConfigBackups,
   loadConfig,
   ModelMuleConfigSchema,
   ProviderConfigSchema,
   ProviderTemplateTypeSchema,
+  ProviderTypeSchema,
   providerTemplate,
   resolveConfigPath,
+  restoreConfigBackup,
+  RoutingModeSchema,
   RoutingConfigSchema,
   saveConfig,
+  TaskTypeSchema,
   type ModelMuleConfig
 } from '@modelmule/config';
 import { ModelMuleService, UsageStore, type ChatMessage } from '@modelmule/core';
@@ -60,6 +67,34 @@ export interface BuildServerOptions {
 }
 
 const providerIdPattern = /^[A-Za-z0-9_-]+$/;
+const ProviderIdSchema = z.string().trim().regex(providerIdPattern, 'Provider id must contain only letters, numbers, underscores, and dashes');
+const ChatMessageSchema = z.object({
+  role: z.enum(['system', 'user', 'assistant', 'tool']),
+  content: z.string().min(1)
+});
+const ChatCompletionRequestSchema = z.object({
+  model: z.string().min(1).optional(),
+  messages: z.array(ChatMessageSchema).min(1),
+  taskType: TaskTypeSchema.optional(),
+  metadata: z.record(z.unknown()).optional()
+});
+const CodeRequestSchema = z.object({
+  prompt: z.string().min(1),
+  model: z.string().min(1).optional()
+});
+const RouteTestRequestSchema = z.object({
+  taskType: TaskTypeSchema.optional()
+});
+const ProviderUpsertRequestSchema = z
+  .object({
+    id: ProviderIdSchema,
+    type: ProviderTemplateTypeSchema.optional(),
+    provider: ProviderConfigSchema.optional()
+  })
+  .refine((value) => value.type || value.provider, { message: 'Either type or provider is required' });
+const RestoreConfigRequestSchema = z.object({
+  name: z.string().min(1)
+});
 
 function createService(config: ModelMuleConfig, store: UsageStore): ModelMuleService {
   const providers = Object.fromEntries(
@@ -69,11 +104,21 @@ function createService(config: ModelMuleConfig, store: UsageStore): ModelMuleSer
   return new ModelMuleService({ config, providers, store });
 }
 
-function validationError(error: unknown) {
+function errorResponse(error: unknown, type = 'validation_error') {
+  if (error instanceof ZodError) {
+    return {
+      error: {
+        message: error.issues.map((issue) => `${issue.path.join('.') || 'body'}: ${issue.message}`).join('; '),
+        type,
+        details: error.issues
+      }
+    };
+  }
+
   return {
     error: {
       message: error instanceof Error ? error.message : String(error),
-      type: 'validation_error'
+      type
     }
   };
 }
@@ -87,7 +132,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
 
   function applyConfig(nextConfig: ModelMuleConfig): ModelMuleConfig {
     config = ModelMuleConfigSchema.parse(nextConfig);
-    saveConfig(config, options.configPath);
+    saveConfig(config, options.configPath, { backup: true });
     service = createService(config, store);
     return config;
   }
@@ -137,18 +182,36 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
   });
 
   app.get('/health', async () => ({ status: 'ok' }));
+  app.get('/capabilities', routeRateLimit, async () => ({
+    providerTypes: ProviderTypeSchema.options,
+    providerTemplates: ProviderTemplateTypeSchema.options,
+    routingModes: RoutingModeSchema.options,
+    taskTypes: TaskTypeSchema.options
+  }));
 
   app.get('/providers', routeRateLimit, async () => ({ providers: await service.listProviders() }));
   app.get('/models', routeRateLimit, async () => ({ models: await service.listModels() }));
   app.get('/usage', routeRateLimit, async () => service.getUsage());
   app.get('/config', routeRateLimit, async () => ({ path: configPath, config }));
+  app.get('/config/backups', routeRateLimit, async () => ({ backups: listConfigBackups(options.configPath) }));
+  app.post('/config/backup', routeRateLimit, async () => ({ backup: createConfigBackup(options.configPath) }));
+  app.post('/config/restore', routeRateLimit, async (request, reply) => {
+    try {
+      const body = RestoreConfigRequestSchema.parse(request.body);
+      restoreConfigBackup(body.name, options.configPath);
+      return { path: configPath, config: reloadConfig() };
+    } catch (error) {
+      reply.code(400);
+      return errorResponse(error);
+    }
+  });
   app.put('/config', routeRateLimit, async (request, reply) => {
     try {
       const nextConfig = ModelMuleConfigSchema.parse(request.body);
       return { path: configPath, config: applyConfig(nextConfig) };
     } catch (error) {
       reply.code(400);
-      return validationError(error);
+      return errorResponse(error);
     }
   });
 
@@ -157,46 +220,28 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
       return { path: configPath, config: reloadConfig() };
     } catch (error) {
       reply.code(400);
-      return validationError(error);
+      return errorResponse(error);
     }
   });
 
   app.post('/route/test', routeRateLimit, async (request, reply) => {
-    const body = request.body as {
-      taskType?: string;
-    };
-
     try {
+      const body = RouteTestRequestSchema.parse(request.body ?? {});
       return service.inspectRoute({
-        taskType: body?.taskType as any
+        taskType: body.taskType
       });
     } catch (error) {
       reply.code(400);
-      return {
-        error: {
-          message: error instanceof Error ? error.message : String(error),
-          type: 'routing_error'
-        }
-      };
+      return errorResponse(error, 'routing_error');
     }
   });
 
   app.post('/config/provider', routeRateLimit, async (request, reply) => {
-    const body = request.body as {
-      id?: string;
-      type?: unknown;
-      provider?: unknown;
-    };
-
     try {
-      const id = String(body?.id ?? '').trim();
-      if (!providerIdPattern.test(id)) {
-        throw new Error('Provider id must contain only letters, numbers, underscores, and dashes');
-      }
-
+      const body = ProviderUpsertRequestSchema.parse(request.body);
       const provider = body.provider
         ? ProviderConfigSchema.parse(body.provider)
-        : providerTemplate(ProviderTemplateTypeSchema.parse(body.type));
+        : providerTemplate(body.type as NonNullable<typeof body.type>);
 
       return {
         path: configPath,
@@ -204,13 +249,13 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
           ...config,
           providers: {
             ...config.providers,
-            [id]: provider
+            [body.id]: provider
           }
         })
       };
     } catch (error) {
       reply.code(400);
-      return validationError(error);
+      return errorResponse(error);
     }
   });
 
@@ -218,10 +263,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
     const params = request.params as { id?: string };
 
     try {
-      const id = String(params.id ?? '').trim();
-      if (!providerIdPattern.test(id)) {
-        throw new Error('Provider id must contain only letters, numbers, underscores, and dashes');
-      }
+      const id = ProviderIdSchema.parse(params.id);
       if (!config.providers[id]) {
         reply.code(404);
         return {
@@ -254,7 +296,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
       };
     } catch (error) {
       reply.code(400);
-      return validationError(error);
+      return errorResponse(error);
     }
   });
 
@@ -270,27 +312,18 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
       };
     } catch (error) {
       reply.code(400);
-      return validationError(error);
+      return errorResponse(error);
     }
   });
 
   app.post('/v1/chat/completions', routeRateLimit, async (request, reply) => {
-    const body = request.body as {
-      model?: string;
-      messages?: ChatMessage[];
-      taskType?: string;
-    };
-
-    if (!Array.isArray(body?.messages) || body.messages.length === 0) {
-      reply.code(400);
-      return { error: 'messages is required' };
-    }
-
     try {
+      const body = ChatCompletionRequestSchema.parse(request.body);
       const routed = await service.chat({
         model: body.model,
-        messages: body.messages,
-        taskType: body.taskType as any
+        messages: body.messages as ChatMessage[],
+        taskType: body.taskType,
+        metadata: body.metadata
       });
 
       return toOpenAIResponse({
@@ -303,28 +336,18 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
         fallbackChain: routed.fallbackChain
       });
     } catch (error) {
+      if (error instanceof ZodError) {
+        reply.code(400);
+        return errorResponse(error, 'invalid_request');
+      }
       reply.code(502);
-      return {
-        error: {
-          message: error instanceof Error ? error.message : String(error),
-          type: 'provider_error'
-        }
-      };
+      return errorResponse(error, 'provider_error');
     }
   });
 
   app.post('/v1/code', routeRateLimit, async (request, reply) => {
-    const body = request.body as {
-      prompt?: string;
-      model?: string;
-    };
-
-    if (!body?.prompt) {
-      reply.code(400);
-      return { error: 'prompt is required' };
-    }
-
     try {
+      const body = CodeRequestSchema.parse(request.body);
       const routed = await service.chat({
         model: body.model,
         taskType: 'coding',
@@ -342,13 +365,12 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
         }
       };
     } catch (error) {
+      if (error instanceof ZodError) {
+        reply.code(400);
+        return errorResponse(error, 'invalid_request');
+      }
       reply.code(502);
-      return {
-        error: {
-          message: error instanceof Error ? error.message : String(error),
-          type: 'provider_error'
-        }
-      };
+      return errorResponse(error, 'provider_error');
     }
   });
 

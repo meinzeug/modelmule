@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import dotenv from 'dotenv';
@@ -19,6 +19,8 @@ export const TaskTypeSchema = z.enum([
 ]);
 
 export type TaskType = z.infer<typeof TaskTypeSchema>;
+
+export const RoutingModeSchema = z.enum(['cheapest', 'balanced', 'premium', 'local-only', 'coding-max', 'free-first']);
 
 export const ProviderTypeSchema = z.enum([
   'openrouter',
@@ -57,7 +59,7 @@ export const RoutingTaskConfigSchema = z.object({
 });
 
 export const RoutingConfigSchema = z.object({
-  defaultMode: z.enum(['cheapest', 'balanced', 'premium', 'local-only', 'coding-max', 'free-first']).default('balanced'),
+  defaultMode: RoutingModeSchema.default('balanced'),
   privacyMode: z.boolean().default(false),
   tasks: z.record(z.string(), RoutingTaskConfigSchema).default({})
 });
@@ -75,6 +77,13 @@ export type ModelMuleConfig = z.infer<typeof ModelMuleConfigSchema>;
 
 export const DEFAULT_CONFIG_PATH = join(homedir(), '.modelmule', 'config.yaml');
 export const DEFAULT_DB_PATH = join(homedir(), '.modelmule', 'modelmule.db');
+
+export interface ConfigBackup {
+  name: string;
+  path: string;
+  createdAt: string;
+  sizeBytes: number;
+}
 
 export function providerTemplate(type: ProviderTemplateType): ProviderConfig {
   switch (type) {
@@ -181,6 +190,70 @@ export function ensureConfigDir(configPath: string): void {
   }
 }
 
+export function resolveConfigBackupDir(configPath?: string): string {
+  return join(dirname(resolveConfigPath(configPath)), 'backups');
+}
+
+function backupName(date = new Date()): string {
+  return `config.${date.toISOString().replace(/[:.]/g, '-')}.yaml`;
+}
+
+function toBackup(name: string, path: string): ConfigBackup {
+  const stat = statSync(path);
+  return {
+    name,
+    path,
+    createdAt: stat.mtime.toISOString(),
+    sizeBytes: stat.size
+  };
+}
+
+export function createConfigBackup(configPath?: string): ConfigBackup | undefined {
+  const path = resolveConfigPath(configPath);
+  if (!existsSync(path)) {
+    return undefined;
+  }
+
+  const dir = resolveConfigBackupDir(configPath);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+
+  const name = backupName();
+  const backupPath = join(dir, name);
+  copyFileSync(path, backupPath);
+  return toBackup(name, backupPath);
+}
+
+export function listConfigBackups(configPath?: string): ConfigBackup[] {
+  const dir = resolveConfigBackupDir(configPath);
+  if (!existsSync(dir)) {
+    return [];
+  }
+
+  return readdirSync(dir)
+    .filter((name) => /^config\.[A-Za-z0-9_.-]+\.yaml$/.test(name))
+    .map((name) => toBackup(name, join(dir, name)))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export function restoreConfigBackup(name: string, configPath?: string): string {
+  if (!/^config\.[A-Za-z0-9_.-]+\.yaml$/.test(name)) {
+    throw new Error('Invalid backup name');
+  }
+
+  const path = resolveConfigPath(configPath);
+  const backupPath = join(resolveConfigBackupDir(configPath), name);
+  if (!existsSync(backupPath)) {
+    throw new Error(`Config backup '${name}' does not exist`);
+  }
+
+  createConfigBackup(configPath);
+  ensureConfigDir(path);
+  copyFileSync(backupPath, path);
+  return path;
+}
+
 export function loadConfig(configPath?: string): ModelMuleConfig {
   const path = resolveConfigPath(configPath);
   if (!existsSync(path)) {
@@ -191,9 +264,12 @@ export function loadConfig(configPath?: string): ModelMuleConfig {
   return ModelMuleConfigSchema.parse(parsed);
 }
 
-export function saveConfig(config: ModelMuleConfig, configPath?: string): string {
+export function saveConfig(config: ModelMuleConfig, configPath?: string, options: { backup?: boolean } = {}): string {
   const path = resolveConfigPath(configPath);
   ensureConfigDir(path);
+  if (options.backup) {
+    createConfigBackup(configPath);
+  }
   const content = YAML.stringify(ModelMuleConfigSchema.parse(config));
   writeFileSync(path, content, 'utf8');
   return path;

@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import type { ProviderConfig, ProviderType } from '@modelmule/config';
 import type { ChatRequest, ChatResponse, ProviderHealth, ProviderRuntime } from '@modelmule/core';
 
@@ -311,7 +311,19 @@ class ShellCommandProvider extends BaseProvider {
   }
 
   async healthCheck(): Promise<ProviderHealth> {
-    return { healthy: Boolean(this.command), message: this.command ? undefined : 'No command configured' };
+    if (!this.command) {
+      return { healthy: false, message: 'No command configured' };
+    }
+
+    const check = spawnSync('sh', ['-c', 'command -v "$1"', 'modelmule-command-check', this.command], {
+      encoding: 'utf8',
+      timeout: 5_000
+    });
+    if (check.status !== 0) {
+      return { healthy: false, message: `Command not found: ${this.command}` };
+    }
+
+    return { healthy: true, message: check.stdout.trim() || this.command };
   }
 
   async chat(request: ChatRequest): Promise<ChatResponse> {

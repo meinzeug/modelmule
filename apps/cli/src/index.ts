@@ -57,12 +57,12 @@ function addProviderTemplate(rawType: string): void {
   const id = `${type}_new`;
   config.providers[id] = providerTemplate(type);
 
-  const path = saveConfig(config);
+  const path = saveConfig(config, undefined, { backup: true });
   console.log(`Provider template '${id}' added in ${path}`);
 }
 
 const program = new Command();
-program.name('modelmule').description('Local AI router for coding tools').version('0.2.0');
+program.name('modelmule').description('Local AI router for coding tools').version('0.3.0');
 
 program
   .command('init')

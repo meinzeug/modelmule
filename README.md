@@ -77,10 +77,14 @@ Most local clients still require an API key field. For ModelMule itself, any pla
 Available endpoints:
 
 - `GET /health`
+- `GET /capabilities`
 - `GET /providers`
 - `GET /models`
 - `GET /usage`
 - `GET /config`
+- `GET /config/backups`
+- `POST /config/backup`
+- `POST /config/restore`
 - `PUT /config`
 - `POST /config/provider`
 - `DELETE /config/provider/:id`
@@ -205,12 +209,11 @@ More setup details are available in [INSTALL.md](./INSTALL.md).
 
 Near-term areas for improvement:
 
-- stronger request and response validation
-- clearer error codes for clients
-- provider capability metadata
-- richer usage reports
 - migration handling for configuration and storage changes
 - documented release process
 - optional authentication for local deployments that need it
+- provider-specific capability scoring
+- packaged Linux desktop distribution
+- import/export workflows for shared provider profiles
 
 The roadmap is intentionally operational: changes should improve reliability, transparency, and maintainability without weakening provider terms or local policy boundaries.

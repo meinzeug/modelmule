@@ -170,6 +170,16 @@ export class UsageStore {
     costTodayUsd: number;
     providerStatus: Array<{ providerId: string; requestCount: number; costUsd: number; errors: number }>;
     frequentModels: Array<{ model: string; count: number }>;
+    recentRequests: Array<{
+      providerId: string;
+      model: string;
+      taskType: string;
+      status: string;
+      totalTokens: number;
+      costUsd: number;
+      createdAt: string;
+    }>;
+    recentErrors: Array<{ providerId?: string; message: string; createdAt: string }>;
     fallbacks: number;
     errors: number;
   } {
@@ -185,6 +195,28 @@ export class UsageStore {
       .prepare('SELECT model, COUNT(*) as count FROM requests WHERE DATE(created_at) = ? GROUP BY model ORDER BY count DESC LIMIT 5')
       .all(date) as Array<{ model: string; count: number }>;
 
+    const recentRequests = this.db
+      .prepare(
+        `SELECT provider_id as providerId, model, task_type as taskType, status, total_tokens as totalTokens,
+          estimated_cost_usd as costUsd, created_at as createdAt
+         FROM requests
+         ORDER BY created_at DESC
+         LIMIT 10`
+      )
+      .all() as Array<{
+      providerId: string;
+      model: string;
+      taskType: string;
+      status: string;
+      totalTokens: number;
+      costUsd: number;
+      createdAt: string;
+    }>;
+
+    const recentErrors = this.db
+      .prepare('SELECT provider_id as providerId, message, created_at as createdAt FROM errors ORDER BY created_at DESC LIMIT 10')
+      .all() as Array<{ providerId?: string; message: string; createdAt: string }>;
+
     const fallbacks = this.db
       .prepare('SELECT COUNT(*) as count FROM routing_events WHERE DATE(created_at) = ? AND fallback_provider_id IS NOT NULL')
       .get(date) as { count: number };
@@ -198,6 +230,8 @@ export class UsageStore {
       costTodayUsd: Number(totals.cost.toFixed(6)),
       providerStatus,
       frequentModels,
+      recentRequests,
+      recentErrors,
       fallbacks: fallbacks.count,
       errors: errors.count
     };

@@ -43,8 +43,8 @@ providers:
     type: openrouter
     apiKeyEnv: OPENROUTER_API_KEY
     dailyRequestLimit: 1000
-  dailyBudgetUsd: 2.0
-  priority: 80
+    dailyBudgetUsd: 2.0
+    priority: 80
     models:
       - openrouter/auto
 
@@ -176,4 +176,5 @@ The CLI and local web console can add templates for common provider setups:
 - Keep provider IDs stable once usage tracking matters.
 - Prefer explicit `models` lists when predictable routing is important.
 - Use `modelmule route test <taskType>` to inspect routing decisions before sending real requests.
+- Server-side config writes create timestamped backups in the config backup directory.
 - Treat config changes as operational changes and review them before shared deployments.

@@ -91,6 +91,12 @@ Health check:
 curl http://127.0.0.1:43110/health
 ```
 
+List server capabilities:
+
+```bash
+curl http://127.0.0.1:43110/capabilities
+```
+
 List providers:
 
 ```bash
@@ -107,6 +113,12 @@ Show usage:
 
 ```bash
 curl http://127.0.0.1:43110/usage
+```
+
+List config backups:
+
+```bash
+curl http://127.0.0.1:43110/config/backups
 ```
 
 Preview routing:

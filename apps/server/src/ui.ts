@@ -97,6 +97,7 @@ export const dashboardHtml = `<!doctype html>
             </div>
           </div>
           <div id="usage-grid" class="metrics"></div>
+          <pre id="recent-usage-output" class="output compact-output"></pre>
         </section>
 
         <section id="config" class="panel">
@@ -107,6 +108,10 @@ export const dashboardHtml = `<!doctype html>
             </div>
           </div>
           <p id="config-path" class="muted"></p>
+          <div class="actions backup-actions">
+            <button id="backup-btn" type="button">Create backup</button>
+          </div>
+          <div id="backup-list" class="backup-list"></div>
           <pre id="config-output" class="output"></pre>
         </section>
       </section>
@@ -372,6 +377,36 @@ pre {
   font-size: 13px;
 }
 
+.compact-output {
+  margin-top: 12px;
+  min-height: 64px;
+}
+
+.backup-actions {
+  margin-bottom: 10px;
+}
+
+.backup-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.backup-item {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 8px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.backup-item strong {
+  overflow-wrap: anywhere;
+}
+
 .metrics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -464,8 +499,10 @@ pre {
 export const dashboardJs = `
 const state = {
   configPayload: null,
+  capabilities: null,
   providers: [],
-  usage: null
+  usage: null,
+  backups: []
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -537,6 +574,26 @@ function renderProviderList() {
   });
 }
 
+function renderProviderTemplateOptions() {
+  const select = document.querySelector('#provider-form select[name="type"]');
+  const labels = {
+    codex_cli: 'Codex CLI',
+    claude_cli: 'Claude CLI',
+    shell_command: 'Shell command',
+    ollama: 'Ollama',
+    openrouter: 'OpenRouter',
+    openai_compatible: 'OpenAI-compatible',
+    anthropic: 'Anthropic'
+  };
+  const templates = state.capabilities && state.capabilities.providerTemplates ? state.capabilities.providerTemplates : [];
+  if (templates.length === 0) {
+    return;
+  }
+  select.innerHTML = templates.map((template) => {
+    return '<option value="' + template + '">' + (labels[template] || template) + '</option>';
+  }).join('');
+}
+
 function renderUsage() {
   const usage = state.usage || {};
   const items = [
@@ -548,6 +605,11 @@ function renderUsage() {
   $('#usage-grid').innerHTML = items.map(([label, value]) => {
     return '<div class="metric"><span>' + label + '</span><strong>' + value + '</strong></div>';
   }).join('');
+
+  $('#recent-usage-output').textContent = JSON.stringify({
+    recentRequests: usage.recentRequests || [],
+    recentErrors: usage.recentErrors || []
+  }, null, 2);
 }
 
 function renderConfig() {
@@ -556,6 +618,35 @@ function renderConfig() {
   }
   $('#config-path').textContent = state.configPayload.path;
   $('#config-output').textContent = JSON.stringify(state.configPayload.config, null, 2);
+}
+
+function renderBackups() {
+  const list = $('#backup-list');
+  if (!state.backups || state.backups.length === 0) {
+    list.innerHTML = '<p class="muted">No config backups yet.</p>';
+    return;
+  }
+
+  list.innerHTML = state.backups.map((backup) => {
+    return [
+      '<div class="backup-item">',
+      '<div><strong>' + backup.name + '</strong><br><span class="muted">' + backup.createdAt + ' · ' + backup.sizeBytes + ' bytes</span></div>',
+      '<button class="secondary" data-restore-backup="' + backup.name + '" type="button">Restore</button>',
+      '</div>'
+    ].join('');
+  }).join('');
+
+  document.querySelectorAll('[data-restore-backup]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const name = button.getAttribute('data-restore-backup');
+      await api('/config/restore', {
+        method: 'POST',
+        body: JSON.stringify({ name })
+      });
+      showToast('Config restored');
+      await loadAll();
+    });
+  });
 }
 
 function setServerStatus(ok) {
@@ -567,17 +658,23 @@ async function loadAll() {
   try {
     await api('/health');
     setServerStatus(true);
-    const [configPayload, providersPayload, usagePayload] = await Promise.all([
+    const [capabilitiesPayload, configPayload, providersPayload, usagePayload, backupPayload] = await Promise.all([
+      api('/capabilities'),
       api('/config'),
       api('/providers'),
-      api('/usage')
+      api('/usage'),
+      api('/config/backups')
     ]);
+    state.capabilities = capabilitiesPayload;
     state.configPayload = configPayload;
     state.providers = providersPayload.providers || [];
     state.usage = usagePayload;
+    state.backups = backupPayload.backups || [];
+    renderProviderTemplateOptions();
     renderProviderList();
     renderUsage();
     renderConfig();
+    renderBackups();
   } catch (error) {
     setServerStatus(false);
     showToast(error.message);
@@ -616,6 +713,12 @@ $('#refresh-btn').addEventListener('click', () => {
 $('#reload-btn').addEventListener('click', async () => {
   await api('/config/reload', { method: 'POST', body: '{}' });
   showToast('Config reloaded');
+  await loadAll();
+});
+
+$('#backup-btn').addEventListener('click', async () => {
+  await api('/config/backup', { method: 'POST', body: '{}' });
+  showToast('Backup created');
   await loadAll();
 });
 
