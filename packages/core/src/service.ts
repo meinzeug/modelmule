@@ -117,7 +117,7 @@ export class ModelMuleService {
     const taskType = this.normalizeTaskType(request.taskType);
     const codingTool = this.resolveCodingTool(request.metadata);
     const excludedProviderIds = this.resolveExcludedProviderIds(request.metadata);
-    const routingProfileId = this.resolveRoutingProfileId(codingTool);
+    const routingProfileId = this.resolveRoutingProfileId(request.metadata, codingTool);
     const decision = this.routing.decide(taskType, this.options.providers, routingProfileId);
     const providers: RoutePreviewProvider[] = [];
     let selectedProvider: string | undefined;
@@ -288,7 +288,11 @@ export class ModelMuleService {
     return new Set();
   }
 
-  private resolveRoutingProfileId(codingTool: string | undefined): string | undefined {
+  private resolveRoutingProfileId(metadata: Record<string, unknown> | undefined, codingTool: string | undefined): string | undefined {
+    const explicitProfileId = typeof metadata?.routingProfileId === 'string' ? metadata.routingProfileId.trim() : '';
+    if (explicitProfileId) {
+      return explicitProfileId;
+    }
     if (!codingTool) {
       return undefined;
     }

@@ -11,6 +11,9 @@ export interface ChatRequest {
   model?: string;
   messages: ChatMessage[];
   taskType?: TaskType;
+  tools?: unknown[];
+  toolChoice?: unknown;
+  parallelToolCalls?: boolean;
   metadata?: Record<string, unknown>;
 }
 
@@ -25,7 +28,16 @@ export interface ChatResponse {
   id: string;
   model: string;
   content: string;
+  toolCalls?: ChatToolCall[];
   usage: ChatUsage;
+  raw?: unknown;
+}
+
+export interface ChatToolCall {
+  id: string;
+  callId: string;
+  name: string;
+  arguments: string;
   raw?: unknown;
 }
 

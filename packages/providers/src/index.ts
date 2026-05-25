@@ -2,6 +2,14 @@ import { spawn, spawnSync } from 'node:child_process';
 import type { ProviderConfig, ProviderType } from '@modelmule/config';
 import type { ChatRequest, ChatResponse, ProviderHealth, ProviderRuntime } from '@modelmule/core';
 
+const OPENROUTER_FREE_TOOL_MODELS = [
+  'qwen/qwen3-coder:free',
+  'openai/gpt-oss-120b:free',
+  'openai/gpt-oss-20b:free',
+  'meta-llama/llama-3.3-70b-instruct:free',
+  'nvidia/nemotron-3-super-120b-a12b:free'
+];
+
 function makeUsage(prompt = 0, completion = 0, estimated = 0) {
   return {
     promptTokens: prompt,
@@ -15,7 +23,108 @@ function parseTextFromMessages(messages: ChatRequest['messages']): string {
   return messages.map((m) => `${m.role}: ${m.content}`).join('\n');
 }
 
-function createResponse(model: string, content: string, usage?: Partial<ChatResponse['usage']>, raw?: unknown): ChatResponse {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function normalizeChatTool(tool: unknown): unknown[] {
+  if (!isRecord(tool)) {
+    return [];
+  }
+
+  if (tool.type === 'function' && isRecord(tool.function)) {
+    return [tool];
+  }
+
+  if (tool.type === 'function' && typeof tool.name === 'string') {
+    const fn: Record<string, unknown> = {
+      name: tool.name,
+      parameters: isRecord(tool.parameters) ? tool.parameters : { type: 'object', properties: {} }
+    };
+    if (typeof tool.description === 'string') {
+      fn.description = tool.description;
+    }
+    if (typeof tool.strict === 'boolean') {
+      fn.strict = tool.strict;
+    }
+    return [{ type: 'function', function: fn }];
+  }
+
+  if (tool.type === 'namespace' && Array.isArray(tool.tools)) {
+    return tool.tools.flatMap((namespaceTool) => normalizeChatTool(namespaceTool));
+  }
+
+  return [];
+}
+
+function normalizeChatTools(tools: unknown[] | undefined): unknown[] | undefined {
+  const normalized = tools?.flatMap((tool) => normalizeChatTool(tool)) ?? [];
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function chatCompletionBody(request: ChatRequest, model: string) {
+  const body: Record<string, unknown> = {
+    model,
+    messages: request.messages
+  };
+  const tools = normalizeChatTools(request.tools);
+  if (tools) {
+    body.tools = tools;
+  }
+  if (request.toolChoice !== undefined) {
+    body.tool_choice = request.toolChoice;
+  }
+  if (request.parallelToolCalls !== undefined) {
+    body.parallel_tool_calls = request.parallelToolCalls;
+  }
+  return body;
+}
+
+function uniqueModels(models: string[]): string[] {
+  return [...new Set(models.filter(Boolean))];
+}
+
+function isTemporaryProviderStatus(status: number): boolean {
+  return status === 400 || status === 408 || status === 409 || status === 429 || status >= 500;
+}
+
+function openRouterModelCandidates(request: ChatRequest, configuredModels: string[]): string[] {
+  const primary = request.model ?? configuredModels[0] ?? 'openrouter/auto';
+  const configuredFallbacks = configuredModels.filter((model) => model !== primary);
+  const shouldUseToolFreeFallbacks = Boolean(request.tools?.length) && (primary === 'openrouter/free' || primary.endsWith(':free'));
+  return uniqueModels([
+    primary,
+    ...(shouldUseToolFreeFallbacks ? OPENROUTER_FREE_TOOL_MODELS : []),
+    ...configuredFallbacks
+  ]);
+}
+
+function extractToolCalls(message: unknown): ChatResponse['toolCalls'] {
+  if (!isRecord(message) || !Array.isArray(message.tool_calls)) {
+    return undefined;
+  }
+
+  const toolCalls = message.tool_calls.flatMap((toolCall, index) => {
+    if (!isRecord(toolCall) || !isRecord(toolCall.function) || typeof toolCall.function.name !== 'string') {
+      return [];
+    }
+
+    const rawArguments = toolCall.function.arguments;
+    const argumentsText = typeof rawArguments === 'string' ? rawArguments : JSON.stringify(rawArguments ?? {});
+    const id = typeof toolCall.id === 'string' && toolCall.id ? toolCall.id : `call_${index}`;
+    return [{
+      id,
+      callId: id,
+      name: toolCall.function.name,
+      arguments: argumentsText,
+      raw: toolCall
+    }];
+  });
+
+  return toolCalls.length > 0 ? toolCalls : undefined;
+}
+
+function createResponse(model: string, content: string, usage?: Partial<ChatResponse['usage']>, raw?: unknown, toolCalls?: ChatResponse['toolCalls']): ChatResponse {
   const prompt = usage?.promptTokens ?? 0;
   const completion = usage?.completionTokens ?? Math.ceil(content.length / 4);
   const estimated = usage?.estimatedCostUsd ?? 0;
@@ -23,6 +132,7 @@ function createResponse(model: string, content: string, usage?: Partial<ChatResp
     id: `mm_${Date.now().toString(36)}`,
     model,
     content,
+    ...(toolCalls?.length ? { toolCalls } : {}),
     usage: makeUsage(prompt, completion, estimated),
     raw
   };
@@ -92,33 +202,40 @@ class OpenRouterProvider extends BaseProvider {
       throw new Error(`Missing env var ${this.apiKeyEnv}`);
     }
 
-    const body = {
-      model: request.model ?? this.configuredModels[0] ?? 'openrouter/auto',
-      messages: request.messages
-    };
+    let lastError: Error | undefined;
+    for (const model of openRouterModelCandidates(request, this.configuredModels)) {
+      const body = chatCompletionBody(request, model);
+      const response = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify(body)
+      });
 
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${apiKey}`
-      },
-      body: JSON.stringify(body)
-    });
+      if (!response.ok) {
+        const text = await response.text();
+        lastError = new Error(`OpenRouter ${response.status}: ${text}`);
+        if (isTemporaryProviderStatus(response.status)) {
+          continue;
+        }
+        throw lastError;
+      }
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`OpenRouter ${response.status}: ${text}`);
+      const payload = (await response.json()) as any;
+      const message = payload.choices?.[0]?.message;
+      const content = message?.content ?? '';
+      const toolCalls = extractToolCalls(message);
+      const usage = {
+        promptTokens: Number(payload.usage?.prompt_tokens ?? 0),
+        completionTokens: Number(payload.usage?.completion_tokens ?? 0),
+        estimatedCostUsd: Number(payload.usage?.cost ?? 0)
+      };
+      return createResponse(String(payload.model ?? body.model), content, usage, payload, toolCalls);
     }
 
-    const payload = (await response.json()) as any;
-    const content = payload.choices?.[0]?.message?.content ?? '';
-    const usage = {
-      promptTokens: Number(payload.usage?.prompt_tokens ?? 0),
-      completionTokens: Number(payload.usage?.completion_tokens ?? 0),
-      estimatedCostUsd: Number(payload.usage?.cost ?? 0)
-    };
-    return createResponse(payload.model ?? body.model, content, usage, payload);
+    throw lastError ?? new Error('OpenRouter request failed');
   }
 }
 
@@ -213,13 +330,15 @@ class OpenAICompatibleProvider extends BaseProvider {
         'content-type': 'application/json',
         authorization: apiKey ? `Bearer ${apiKey}` : 'Bearer dummy-local-key'
       },
-      body: JSON.stringify({ model, messages: request.messages })
+      body: JSON.stringify(chatCompletionBody(request, model))
     });
     if (!response.ok) {
       throw new Error(`OpenAI-compatible ${response.status}: ${await response.text()}`);
     }
     const payload = (await response.json()) as any;
-    const content = payload.choices?.[0]?.message?.content ?? '';
+    const message = payload.choices?.[0]?.message;
+    const content = message?.content ?? '';
+    const toolCalls = extractToolCalls(message);
     return createResponse(
       payload.model ?? model,
       content,
@@ -228,7 +347,8 @@ class OpenAICompatibleProvider extends BaseProvider {
         completionTokens: Number(payload.usage?.completion_tokens ?? 0),
         estimatedCostUsd: Number(payload.usage?.cost ?? 0)
       },
-      payload
+      payload,
+      toolCalls
     );
   }
 }

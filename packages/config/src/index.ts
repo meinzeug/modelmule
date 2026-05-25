@@ -156,7 +156,7 @@ export function providerTemplate(type: ProviderTemplateType): ProviderConfig {
         enabled: true,
         apiKeyEnv: 'OPENROUTER_API_KEY',
         priority: 70,
-        models: ['openrouter/auto']
+        models: ['qwen/qwen3-coder:free', 'openrouter/auto']
       };
     case 'ollama':
       return {
@@ -231,7 +231,7 @@ export const defaultConfig = (): ModelMuleConfig => ({
       dailyRequestLimit: 1000,
       dailyBudgetUsd: 2,
       priority: 80,
-      models: ['openrouter/auto']
+      models: ['qwen/qwen3-coder:free', 'openrouter/auto']
     },
     ollama_local: {
       type: 'ollama',
@@ -265,6 +265,12 @@ export const defaultConfig = (): ModelMuleConfig => ({
       enabled: true,
       tags: ['free', 'cheap', 'coding']
     },
+    'openrouter_main:qwen/qwen3-coder:free': {
+      providerId: 'openrouter_main',
+      model: 'qwen/qwen3-coder:free',
+      enabled: true,
+      tags: ['free', 'cheap', 'coding']
+    },
     'ollama_local:llama3.1:8b': {
       providerId: 'ollama_local',
       model: 'llama3.1:8b',
@@ -279,7 +285,7 @@ export const defaultConfig = (): ModelMuleConfig => ({
       mode: 'free-first',
       providerOrder: ['openrouter_main', 'ollama_local'],
       modelPreferences: {
-        openrouter_main: ['openrouter/free', 'openrouter/auto'],
+        openrouter_main: ['qwen/qwen3-coder:free', 'openrouter/free', 'openrouter/auto'],
         ollama_local: ['llama3.1:8b']
       },
       allowPaid: true,
@@ -292,7 +298,7 @@ export const defaultConfig = (): ModelMuleConfig => ({
       providerOrder: ['ollama_local', 'openrouter_main'],
       modelPreferences: {
         ollama_local: ['llama3.1:8b'],
-        openrouter_main: ['openrouter/free']
+        openrouter_main: ['qwen/qwen3-coder:free', 'openrouter/free']
       },
       allowPaid: false,
       localOnly: false
@@ -307,12 +313,50 @@ export const defaultConfig = (): ModelMuleConfig => ({
       },
       allowPaid: true,
       localOnly: false
+    },
+    local_private: {
+      name: 'Lokal/Privat',
+      description: 'Nur lokale Provider wie Ollama oder LM Studio nutzen.',
+      mode: 'local-only',
+      providerOrder: ['ollama_local', 'lm_studio_local'],
+      modelPreferences: {
+        ollama_local: ['llama3.1:8b'],
+        lm_studio_local: ['local-model']
+      },
+      allowPaid: false,
+      localOnly: true
+    },
+    coding_cheap: {
+      name: 'Coding guenstig',
+      description: 'Coding-AIs nutzen bevorzugt guenstige oder freie Coding-Modelle.',
+      mode: 'free-first',
+      providerOrder: ['openrouter_main', 'ollama_local', 'lm_studio_local'],
+      modelPreferences: {
+        openrouter_main: ['qwen/qwen3-coder:free', 'openrouter/free', 'openrouter/auto'],
+        ollama_local: ['llama3.1:8b'],
+        lm_studio_local: ['local-model']
+      },
+      allowPaid: true,
+      localOnly: false
+    },
+    coding_strong: {
+      name: 'Coding stark',
+      description: 'Fuer schwere Coding-Aufgaben starke Modelle bevorzugen.',
+      mode: 'coding-max',
+      providerOrder: ['openrouter_main', 'anthropic_main', 'openai_main', 'ollama_local'],
+      modelPreferences: {
+        openrouter_main: ['openrouter/auto'],
+        anthropic_main: ['claude-3-5-sonnet-latest'],
+        openai_main: ['gpt-4.1-mini']
+      },
+      allowPaid: true,
+      localOnly: false
     }
   },
   codingAiTools: {
     codex: { enabled: true, routingProfileId: 'free_first' },
     opencode: { enabled: true, routingProfileId: 'only_free' },
-    aider: { enabled: true, routingProfileId: 'free_first' },
+    aider: { enabled: true, routingProfileId: 'coding_cheap' },
     claude_code: { enabled: true, routingProfileId: 'best_quality' }
   }
 });
@@ -449,9 +493,18 @@ function applyRuntimeDefaults(config: ModelMuleConfig): ModelMuleConfig {
   const defaults = defaultConfig();
   return ModelMuleConfigSchema.parse({
     ...config,
-    models: Object.keys(config.models ?? {}).length > 0 ? config.models : defaults.models,
-    routingProfiles: Object.keys(config.routingProfiles ?? {}).length > 0 ? config.routingProfiles : defaults.routingProfiles,
-    codingAiTools: Object.keys(config.codingAiTools ?? {}).length > 0 ? config.codingAiTools : defaults.codingAiTools
+    models: {
+      ...defaults.models,
+      ...(config.models ?? {})
+    },
+    routingProfiles: {
+      ...defaults.routingProfiles,
+      ...(config.routingProfiles ?? {})
+    },
+    codingAiTools: {
+      ...defaults.codingAiTools,
+      ...(config.codingAiTools ?? {})
+    }
   });
 }
 

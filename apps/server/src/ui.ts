@@ -48,8 +48,14 @@ export const dashboardHtml = `<!doctype html>
           <div class="start-layout">
             <div>
               <p class="eyebrow">Start</p>
-              <h2>ModelMule verbindet deine Coding-AI mit den passenden Modellen</h2>
-              <p class="muted">Waehle einen Anbieter, ein Routing-Profil und dein Coding-Tool. ModelMule stellt danach den lokalen OpenAI-kompatiblen Endpunkt bereit.</p>
+              <h2>Lokales Control Panel fuer Coding-AI-Provider</h2>
+              <p class="muted">ModelMule laeuft lokal, stellt http://127.0.0.1:43110/v1 bereit und verbindet Codex, Claude Code, OpenCode oder Aider mit deinen Provider- und Routing-Profilen.</p>
+              <div class="start-card-grid">
+                <a href="#providers" class="start-card">1. Provider verbinden</a>
+                <a href="#coding-ais" class="start-card">2. Coding-AI auswaehlen</a>
+                <a href="#routing-profiles" class="start-card">3. Routing einstellen</a>
+                <a href="#chat" class="start-card">4. Verbindung testen</a>
+              </div>
             </div>
             <div id="setup-status-grid" class="setup-status-grid"></div>
           </div>
@@ -128,6 +134,10 @@ export const dashboardHtml = `<!doctype html>
             </div>
           </div>
           <p class="muted">Profile legen fest, welche Provider und Modelle zuerst genutzt werden. Coding-AIs konnen diesen Profilen zugewiesen werden.</p>
+          <div class="quick-actions">
+            <button id="activate-free-first-btn" class="secondary" type="button">Free First aktivieren</button>
+            <button id="activate-only-free-btn" class="secondary" type="button">Nur kostenlose Modelle nutzen</button>
+          </div>
           <div id="routing-profile-list" class="profile-grid"></div>
           <form id="tool-assignment-form" class="custom-cli-form">
             <label>
@@ -163,12 +173,7 @@ export const dashboardHtml = `<!doctype html>
             </label>
             <label>
               Anbieter
-              <select name="type">
-                <option value="openrouter">OpenRouter</option>
-                <option value="openai_compatible">OpenAI-kompatibel</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="ollama">Ollama (lokal)</option>
-              </select>
+              <select name="presetId"></select>
             </label>
             <label>
               API-Basis-URL (optional)
@@ -184,6 +189,10 @@ export const dashboardHtml = `<!doctype html>
             </label>
             <button type="submit">Anbieter speichern</button>
           </form>
+          <div class="account-note">
+            <strong>ChatGPT- oder Claude-Abo?</strong>
+            Direkte Abo-Nutzung wird nur angezeigt, wenn ein offizielles Tool oder eine offizielle API/CLI sie erlaubt. ModelMule baut keine Cookie-, Scraping- oder Account-Automation.
+          </div>
           <div id="provider-list" class="provider-grid"></div>
         </section>
 
@@ -202,6 +211,14 @@ export const dashboardHtml = `<!doctype html>
                 <option value="cheap-chat">Alltag</option>
                 <option value="local-private">Privat lokal</option>
               </select>
+            </label>
+            <label>
+              Tool
+              <select name="codingTool"></select>
+            </label>
+            <label>
+              Routing-Profil
+              <select name="routingProfileId"></select>
             </label>
             <label class="chat-prompt">
               Deine Nachricht
@@ -475,6 +492,23 @@ pre {
   gap: 10px;
 }
 
+.start-card-grid {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.start-card {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 14px;
+  text-decoration: none;
+  font-weight: 700;
+}
+
 .setup-step {
   border: 1px solid var(--line);
   background: #fff;
@@ -695,6 +729,19 @@ pre {
   gap: 12px;
 }
 
+.account-note {
+  border: 1px solid rgba(176, 90, 42, 0.28);
+  background: #fff8ef;
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 0 0 14px;
+}
+
+.account-note strong {
+  color: var(--ink);
+}
+
 .coding-ai-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -892,6 +939,13 @@ pre {
   margin: 10px 0;
 }
 
+.quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0;
+}
+
 .backup-list {
   display: grid;
   gap: 8px;
@@ -965,6 +1019,7 @@ pre {
 
   .topbar,
   .start-layout,
+  .start-card-grid,
   .setup-status-grid,
   .assistant-card,
   .assistant-summary,
@@ -1010,7 +1065,7 @@ const wizardSteps = [
 ];
 
 const defaultsByType = {
-  openrouter: { baseUrl: 'https://openrouter.ai/api/v1', model: 'openrouter/auto', isLocal: false },
+  openrouter: { baseUrl: 'https://openrouter.ai/api/v1', model: 'qwen/qwen3-coder:free', isLocal: false },
   openai_compatible: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4.1-mini', isLocal: false },
   anthropic: { baseUrl: 'https://api.anthropic.com', model: 'claude-3-5-sonnet-latest', isLocal: false },
   ollama: { baseUrl: 'http://127.0.0.1:11434', model: 'llama3.1:8b', isLocal: true }
@@ -1026,7 +1081,10 @@ const clientEnvHintsByTool = {
 const defaultProviderIds = {
   openrouter: 'openrouter_main',
   ollama: 'ollama_local',
-  lm_studio: 'lm_studio_local'
+  lm_studio: 'lm_studio_local',
+  openai: 'openai_main',
+  openai_compatible: 'openai_compatible_main',
+  custom_api: 'custom_api_main'
 };
 
 const tagLabels = {
@@ -1043,6 +1101,10 @@ const tagLabels = {
 
 function presetProviderId(presetId) {
   return defaultProviderIds[presetId] || presetId + '_main';
+}
+
+function providerPreset(presetId) {
+  return (state.providerPresets || []).find((preset) => preset.id === presetId);
 }
 
 function setSelectValue(select, value) {
@@ -1122,14 +1184,43 @@ function inferApiKeyEnv(providerId, type) {
   return 'MODELMULE_' + (normalized || 'PROVIDER') + '_API_KEY';
 }
 
+function providerStatus(id, provider, health) {
+  if (provider.enabled === false) {
+    return { label: 'deaktiviert', className: '', detail: 'Provider ist ausgeschaltet' };
+  }
+  if (provider.apiKeyEnv && state.setupStatus && (state.setupStatus.missingSecretProviderIds || []).includes(id)) {
+    return { label: 'API-Key fehlt', className: 'warn', detail: 'Key im Provider speichern' };
+  }
+  if (health && health.healthy) {
+    return { label: 'bereit', className: 'ok', detail: health.message || 'Provider erreichbar' };
+  }
+  return { label: 'nicht erreichbar', className: 'fail', detail: health && health.message ? health.message : 'Noch nicht getestet oder nicht erreichbar' };
+}
+
+function costMode(provider, model) {
+  const lower = String(model || '').toLowerCase();
+  if (provider.isLocal || provider.type === 'ollama' || String(provider.baseUrl || '').includes('127.0.0.1') || String(provider.baseUrl || '').includes('localhost')) {
+    return 'lokal/kostenlos';
+  }
+  if (lower.includes(':free') || lower.includes('/free') || lower.endsWith('-free')) {
+    return 'kostenlos markiert';
+  }
+  return provider.apiKeyEnv ? 'paid/unbekannt' : 'unbekannt';
+}
+
 function providerSecretStorageKey(providerId) {
   return 'modelmule.providerKey.' + providerId;
 }
 
 function buildSimpleProvider(form) {
   const id = String(form.elements.id.value || '').trim();
-  const type = String(form.elements.type.value || 'openrouter');
-  const baseDefaults = defaultsByType[type] || defaultsByType.openrouter;
+  const presetId = String(form.elements.presetId.value || 'openrouter');
+  const preset = providerPreset(presetId);
+  const type = preset && preset.type !== 'account_placeholder' ? preset.type : 'openai_compatible';
+  const baseDefaults = {
+    ...(defaultsByType[type] || defaultsByType.openrouter),
+    ...(preset || {})
+  };
   const model = optionalString(form.elements.model.value);
   const baseUrl = optionalString(form.elements.baseUrl.value) || baseDefaults.baseUrl;
 
@@ -1141,8 +1232,8 @@ function buildSimpleProvider(form) {
     isLocal: Boolean(baseDefaults.isLocal)
   };
 
-  if (type !== 'ollama') {
-    provider.apiKeyEnv = inferApiKeyEnv(id, type);
+  if (!baseDefaults.isLocal && type !== 'ollama') {
+    provider.apiKeyEnv = baseDefaults.apiKeyEnv || inferApiKeyEnv(id, type);
   }
 
   return { id, provider };
@@ -1153,7 +1244,7 @@ async function applyProviderSecret(providerId, key) {
     method: 'POST',
     body: JSON.stringify({ id: providerId, apiKey: key })
   });
-  localStorage.setItem(providerSecretStorageKey(providerId), key);
+  localStorage.setItem(providerSecretStorageKey(providerId), 'configured');
 }
 
 async function reapplyStoredSecrets() {
@@ -1167,13 +1258,8 @@ async function reapplyStoredSecrets() {
       continue;
     }
     const stored = localStorage.getItem(providerSecretStorageKey(providerId));
-    if (!stored) {
-      continue;
-    }
-    try {
-      await applyProviderSecret(providerId, stored);
-    } catch (_error) {
-      // Ignore silently; user can re-enter key.
+    if (stored && stored !== 'configured') {
+      localStorage.removeItem(providerSecretStorageKey(providerId));
     }
   }
 }
@@ -1343,6 +1429,45 @@ function renderSetupAssistant() {
   renderWizardStep();
 }
 
+function renderProviderPresetForm() {
+  const form = $('#simple-provider-form');
+  const select = form.elements.presetId;
+  const presets = (state.providerPresets || []).filter((preset) => preset.type !== 'account_placeholder');
+  const current = select.value || 'openrouter';
+  select.innerHTML = presets.map((preset) => {
+    const suffix = preset.isLocal ? ' lokal' : preset.apiKeyEnv ? ' API' : '';
+    return '<option value="' + escapeHtml(preset.id) + '">' + escapeHtml(preset.name + suffix) + '</option>';
+  }).join('');
+  setSelectValue(select, current);
+  updateProviderPresetHints();
+}
+
+function updateProviderPresetHints() {
+  const form = $('#simple-provider-form');
+  const presetId = String(form.elements.presetId.value || 'openrouter');
+  const preset = providerPreset(presetId) || providerPreset('openrouter') || {};
+  form.elements.id.placeholder = presetProviderId(presetId);
+  form.elements.baseUrl.placeholder = preset.baseUrl || 'Automatisch passend gesetzt';
+  form.elements.model.placeholder = preset.model || 'Standardmodell';
+  form.elements.apiKey.placeholder = preset.isLocal ? 'lokal nicht noetig' : 'API-Key hier einfuegen';
+}
+
+function renderChatSelectors() {
+  const form = $('#chat-form');
+  const toolSelect = form.elements.codingTool;
+  const profileSelect = form.elements.routingProfileId;
+  const currentTool = toolSelect.value || '';
+  const currentProfile = profileSelect.value || 'free_first';
+  toolSelect.innerHTML = ['<option value="">Allgemein</option>'].concat((state.codingAiTools || []).map((tool) => {
+    return '<option value="' + escapeHtml(tool.id) + '">' + escapeHtml(tool.name) + '</option>';
+  })).join('');
+  profileSelect.innerHTML = Object.entries(state.routingProfiles || {}).map(([id, profile]) => {
+    return '<option value="' + escapeHtml(id) + '">' + escapeHtml(profile.name || id) + '</option>';
+  }).join('');
+  setSelectValue(toolSelect, currentTool);
+  setSelectValue(profileSelect, currentProfile);
+}
+
 function renderModelCatalog() {
   const list = $('#model-list');
   const models = state.modelCatalog || [];
@@ -1430,6 +1555,8 @@ function renderCodingAiList() {
       const configured = Array.isArray(tool.configuredProviders) && tool.configuredProviders.length > 0
         ? tool.configuredProviders.join(', ')
         : 'noch nicht verbunden';
+      const assignment = tool.assignment || state.toolAssignments[tool.id] || {};
+      const profile = assignment.routingProfileId && state.routingProfiles ? state.routingProfiles[assignment.routingProfileId] : undefined;
 
       return [
         '<article class="coding-ai-card">',
@@ -1440,7 +1567,9 @@ function renderCodingAiList() {
         '<div class="provider-meta">',
         '<span>' + escapeHtml(tool.description || '') + '</span>',
         '<span>Befehl: ' + escapeHtml(tool.command) + (tool.commandPath ? ' (' + escapeHtml(tool.commandPath) + ')' : '') + '</span>',
+        '<span>Version: ' + escapeHtml(tool.version || 'nicht ermittelt') + '</span>',
         '<span>Provider: ' + escapeHtml(configured) + '</span>',
+        '<span>Routing-Profil: ' + escapeHtml(profile ? profile.name || assignment.routingProfileId : assignment.routingProfileId || 'nicht zugewiesen') + '</span>',
         '<span>API-Key: nicht erforderlich fur die Verbindung als CLI-Provider</span>',
         '<span>Tool-Endpoint: http://127.0.0.1:43110/v1</span>',
         '<span>Tool-API-Key: modelmule (Platzhalter)</span>',
@@ -1452,8 +1581,12 @@ function renderCodingAiList() {
         '</form>',
         '<form class="coding-ai-actions" data-connect-form="' + escapeHtml(tool.id) + '">',
         '<label>Provider-ID<input name="providerId" placeholder="' + escapeHtml(tool.defaultProviderId || tool.id + '_cli') + '" /></label>',
-        '<button type="submit">Mit ModelMule verbinden</button>',
+        '<button type="submit">' + (tool.id === 'codex' ? 'Codex automatisch konfigurieren' : 'Mit ModelMule verbinden') + '</button>',
         '</form>',
+        '<div class="provider-actions">',
+        '<button class="secondary" data-test-tool="' + escapeHtml(tool.id) + '" type="button">Test ausfuehren</button>',
+        '<button class="secondary" data-tool-help="' + escapeHtml(tool.id) + '" type="button">Anleitung anzeigen</button>',
+        '</div>',
         '</article>'
       ].join('');
     })
@@ -1491,6 +1624,26 @@ function renderCodingAiList() {
       await loadAll();
     });
   });
+
+  document.querySelectorAll('[data-test-tool]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const toolId = button.getAttribute('data-test-tool');
+      const result = await api('/tools/coding-ai/test', {
+        method: 'POST',
+        body: JSON.stringify({ toolId })
+      });
+      showToast(result.message || 'Tool-Test beendet');
+    });
+  });
+
+  document.querySelectorAll('[data-tool-help]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const toolId = button.getAttribute('data-tool-help');
+      const hints = clientEnvHintsByTool[toolId] || ['OPENAI_BASE_URL=http://127.0.0.1:43110/v1', 'OPENAI_API_KEY=modelmule'];
+      $('#chat-output').textContent = ['Anleitung fuer ' + toolId, 'Endpoint: http://127.0.0.1:43110/v1', 'API-Key: modelmule', '', ...hints].join('\n');
+      location.hash = '#chat';
+    });
+  });
 }
 
 function renderProviderList() {
@@ -1506,23 +1659,25 @@ function renderProviderList() {
 
   list.innerHTML = entries.map(([id, provider]) => {
     const health = healthById.get(id);
-    const healthy = health ? health.healthy : false;
     const model = Array.isArray(provider.models) && provider.models.length > 0 ? provider.models[0] : 'auto';
-    const hasStoredKey = Boolean(localStorage.getItem(providerSecretStorageKey(id)));
+    const status = providerStatus(id, provider, health);
     const keyHint = provider.apiKeyEnv
-      ? 'API-Key: ' + (hasStoredKey ? 'hinterlegt' : 'fehlt')
+      ? 'API-Key: ' + (status.label === 'API-Key fehlt' ? 'fehlt' : 'hinterlegt/maskiert')
       : 'Kein API-Key notwendig';
 
     return [
       '<article class="provider-card">',
       '<div class="provider-title">',
-      '<strong>' + escapeHtml(id) + '</strong>',
-      '<span class="badge ' + (healthy ? 'ok' : 'fail') + '">' + (healthy ? 'bereit' : 'prufen') + '</span>',
+      '<strong>' + escapeHtml(provider.displayName || id) + '</strong>',
+      '<span class="badge ' + escapeHtml(status.className) + '">' + escapeHtml(status.label) + '</span>',
       '</div>',
       '<div class="provider-meta">',
+      '<span>ID: ' + escapeHtml(id) + '</span>',
       '<span>Typ: ' + escapeHtml(provider.type) + '</span>',
       '<span>Modell: ' + escapeHtml(model) + '</span>',
+      '<span>Kostenmodus: ' + escapeHtml(costMode(provider, model)) + '</span>',
       '<span>' + escapeHtml(keyHint) + '</span>',
+      '<span>' + escapeHtml(status.detail) + '</span>',
       '</div>',
       provider.apiKeyEnv ? (
         '<form class="provider-secret-form" data-provider-secret-form="' + escapeHtml(id) + '">' +
@@ -1531,6 +1686,9 @@ function renderProviderList() {
         '</form>'
       ) : '',
       '<div class="provider-actions">',
+      '<button class="secondary" data-edit-provider="' + escapeHtml(id) + '" type="button">Bearbeiten</button>',
+      '<button class="secondary" data-test-provider="' + escapeHtml(id) + '" type="button">Testen</button>',
+      '<button class="secondary" data-toggle-provider="' + escapeHtml(id) + '" data-next-enabled="' + (provider.enabled === false) + '" type="button">' + (provider.enabled === false ? 'Aktivieren' : 'Deaktivieren') + '</button>',
       '<button class="secondary" data-prioritize-coding="' + escapeHtml(id) + '" type="button">Als Coding-Standard setzen</button>',
       '<button class="danger" data-delete-provider="' + escapeHtml(id) + '" type="button">Entfernen</button>',
       '</div>',
@@ -1560,6 +1718,44 @@ function renderProviderList() {
       localStorage.removeItem(providerSecretStorageKey(id));
       showToast('Anbieter entfernt');
       await loadAll();
+    });
+  });
+
+  document.querySelectorAll('[data-test-provider]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const id = button.getAttribute('data-test-provider');
+      const result = await api('/providers/' + encodeURIComponent(id) + '/test');
+      showToast(result.message || (result.ready ? 'Provider bereit' : 'Provider nicht erreichbar'));
+      await loadAll();
+    });
+  });
+
+  document.querySelectorAll('[data-toggle-provider]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const id = button.getAttribute('data-toggle-provider');
+      const enabled = button.getAttribute('data-next-enabled') === 'true';
+      await api('/config/provider/' + encodeURIComponent(id) + '/enabled', {
+        method: 'POST',
+        body: JSON.stringify({ enabled })
+      });
+      showToast(enabled ? 'Provider aktiviert' : 'Provider deaktiviert');
+      await loadAll();
+    });
+  });
+
+  document.querySelectorAll('[data-edit-provider]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const id = button.getAttribute('data-edit-provider');
+      const provider = config.providers[id];
+      const form = $('#simple-provider-form');
+      form.elements.id.value = id;
+      form.elements.baseUrl.value = provider.baseUrl || '';
+      form.elements.model.value = Array.isArray(provider.models) && provider.models.length ? provider.models[0] : '';
+      const preset = (state.providerPresets || []).find((item) => item.type === provider.type && item.baseUrl === provider.baseUrl) || (state.providerPresets || []).find((item) => item.type === provider.type);
+      if (preset) {
+        setSelectValue(form.elements.presetId, preset.id);
+      }
+      location.hash = '#providers';
     });
   });
 
@@ -1627,6 +1823,8 @@ async function loadAll() {
     state.providerPresets = providerPresetsPayload.presets || [];
 
     await reapplyStoredSecrets();
+    renderProviderPresetForm();
+    renderChatSelectors();
     renderSetupAssistant();
     renderModelCatalog();
     renderRoutingProfiles();
@@ -1679,12 +1877,28 @@ async function applySetupWizard() {
   });
 
   if (apiKey && result.providerId) {
-    localStorage.setItem(providerSecretStorageKey(result.providerId), apiKey);
+    localStorage.setItem(providerSecretStorageKey(result.providerId), 'configured');
   }
 
   form.elements.apiKey.value = '';
   showToast(result.codexConfig ? 'Setup angewendet und Codex automatisch verbunden' : 'Setup angewendet');
   closeSetupWizard();
+  await loadAll();
+}
+
+async function assignProfileToAllCodingTools(profileId) {
+  const tools = state.codingAiTools || [];
+  await Promise.all(tools.map((tool) => api('/tools/coding-ai/assign', {
+    method: 'POST',
+    body: JSON.stringify({
+      toolId: tool.id,
+      assignment: {
+        enabled: true,
+        routingProfileId: profileId
+      }
+    })
+  })));
+  showToast(profileId === 'only_free' ? 'Nur kostenlose Modelle aktiviert' : 'Free First aktiviert');
   await loadAll();
 }
 
@@ -1740,13 +1954,10 @@ $('#copy-endpoint-btn').addEventListener('click', async () => {
   }
 });
 
-$('#simple-provider-form select[name="type"]').addEventListener('change', (event) => {
-  const form = $('#simple-provider-form');
-  const type = String(event.currentTarget.value || 'openrouter');
-  const defaults = defaultsByType[type] || defaultsByType.openrouter;
-  form.elements.baseUrl.placeholder = defaults.baseUrl || 'Automatisch passend gesetzt';
-  form.elements.model.placeholder = defaults.model || 'z. B. openrouter/auto';
-});
+$('#activate-free-first-btn').addEventListener('click', () => assignProfileToAllCodingTools('free_first'));
+$('#activate-only-free-btn').addEventListener('click', () => assignProfileToAllCodingTools('only_free'));
+
+$('#simple-provider-form select[name="presetId"]').addEventListener('change', updateProviderPresetHints);
 
 $('#chat-form').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -1758,18 +1969,23 @@ $('#chat-form').addEventListener('submit', async (event) => {
 
   $('#chat-output').textContent = 'Sende Anfrage ...';
   try {
-    const payload = await api('/v1/chat/completions', {
+    const payload = await api('/test/run', {
       method: 'POST',
       body: JSON.stringify({
         taskType: String(form.elements.taskPreset.value || 'coding'),
-        messages: [{ role: 'user', content: prompt }]
+        prompt,
+        codingTool: optionalString(form.elements.codingTool.value),
+        routingProfileId: optionalString(form.elements.routingProfileId.value)
       })
     });
 
     $('#chat-output').textContent = JSON.stringify({
-      antwort: payload.choices && payload.choices[0] ? payload.choices[0].message.content : '',
+      antwort: payload.response,
+      anbieter: payload.provider,
       modell: payload.model,
-      anbieter: payload.metadata && payload.metadata.modelmule ? payload.metadata.modelmule.usedProvider : 'unbekannt'
+      routingProfil: payload.routingProfileId,
+      tool: payload.codingTool || 'allgemein',
+      fallbackKette: payload.fallbackChain || []
     }, null, 2);
 
     await loadAll();

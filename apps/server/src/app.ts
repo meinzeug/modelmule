@@ -33,6 +33,8 @@ import { ModelMuleService, UsageStore, type ChatMessage } from '@modelmule/core'
 import { createProvider } from '@modelmule/providers';
 import { dashboardCss, dashboardHtml, dashboardJs } from './ui.js';
 
+const OPENROUTER_FREE_CODING_MODEL = 'qwen/qwen3-coder:free';
+
 function toOpenAIResponse(input: {
   id: string;
   model: string;
@@ -132,6 +134,13 @@ function responsesInputToChatMessages(input: { instructions?: string; input?: un
       }
 
       const inputItem = item as Record<string, unknown>;
+      if (inputItem.type === 'function_call_output' || inputItem.type === 'custom_tool_call_output') {
+        const output = responseContentToText(inputItem.output).trim() || '(completed with no output)';
+        const callId = typeof inputItem.call_id === 'string' ? ` ${inputItem.call_id}` : '';
+        messages.push({ role: 'user', content: `Tool result${callId}:\n${output}` });
+        continue;
+      }
+
       const content = responseContentToText(inputItem.content ?? inputItem.text ?? inputItem.input_text).trim();
       if (content) {
         messages.push({ role: responseRoleToChatRole(inputItem.role), content });
@@ -147,10 +156,18 @@ function responsesInputToChatMessages(input: { instructions?: string; input?: un
   return messages;
 }
 
+function codexCompatibleModel(model: string | undefined, hasTools = false): string | undefined {
+  if (hasTools && model === 'openrouter/free') {
+    return OPENROUTER_FREE_CODING_MODEL;
+  }
+  return model;
+}
+
 function toResponsesApiResponse(input: {
   id: string;
   model: string;
   content: string;
+  toolCalls?: Array<{ id: string; callId: string; name: string; arguments: string }>;
   promptTokens: number;
   completionTokens: number;
   usedProvider: string;
@@ -159,13 +176,15 @@ function toResponsesApiResponse(input: {
   codingTool?: string;
 }) {
   const created = Math.floor(Date.now() / 1000);
-  return {
-    id: input.id,
-    object: 'response',
-    created_at: created,
-    status: 'completed',
-    model: input.model,
-    output: [
+  const output = [
+    ...(input.toolCalls?.map((toolCall) => ({
+      id: toolCall.id,
+      type: 'function_call',
+      name: toolCall.name,
+      arguments: toolCall.arguments,
+      call_id: toolCall.callId
+    })) ?? []),
+    ...(input.content ? [
       {
         id: `${input.id}-message`,
         type: 'message',
@@ -179,7 +198,16 @@ function toResponsesApiResponse(input: {
           }
         ]
       }
-    ],
+    ] : [])
+  ];
+
+  return {
+    id: input.id,
+    object: 'response',
+    created_at: created,
+    status: 'completed',
+    model: input.model,
+    output,
     output_text: input.content,
     usage: {
       input_tokens: input.promptTokens,
@@ -241,9 +269,15 @@ function toCodexModelInfo(providerId: string, model: string) {
   };
 }
 
+function codexDiscoveryModels(models: string[]): string[] {
+  const visibleModels = models.flatMap((model) => {
+    const compatibleModel = codexCompatibleModel(model, true);
+    return compatibleModel && compatibleModel !== model ? [compatibleModel, model] : [model];
+  });
+  return [...new Set(visibleModels)];
+}
+
 function sendResponsesStream(reply: { raw: NodeJS.WritableStream & { setHeader(name: string, value: string): void; statusCode: number } }, response: ReturnType<typeof toResponsesApiResponse>) {
-  const message = response.output[0];
-  const content = message.content[0];
   const writeEvent = (event: string, data: unknown) => {
     reply.raw.write(`event: ${event}\n`);
     reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
@@ -273,51 +307,54 @@ function sendResponsesStream(reply: { raw: NodeJS.WritableStream & { setHeader(n
       output_text: ''
     }
   });
-  writeEvent('response.output_item.added', {
-    type: 'response.output_item.added',
-    output_index: 0,
-    item: {
-      ...message,
-      status: 'in_progress',
-      content: []
+  for (const [outputIndex, item] of response.output.entries()) {
+    writeEvent('response.output_item.added', {
+      type: 'response.output_item.added',
+      output_index: outputIndex,
+      item: item.type === 'message' ? { ...item, status: 'in_progress', content: [] } : item
+    });
+
+    if (item.type === 'message' && 'content' in item && Array.isArray(item.content)) {
+      const content = item.content[0];
+      writeEvent('response.content_part.added', {
+        type: 'response.content_part.added',
+        item_id: item.id,
+        output_index: outputIndex,
+        content_index: 0,
+        part: {
+          ...content,
+          text: ''
+        }
+      });
+      writeEvent('response.output_text.delta', {
+        type: 'response.output_text.delta',
+        item_id: item.id,
+        output_index: outputIndex,
+        content_index: 0,
+        delta: response.output_text
+      });
+      writeEvent('response.output_text.done', {
+        type: 'response.output_text.done',
+        item_id: item.id,
+        output_index: outputIndex,
+        content_index: 0,
+        text: response.output_text
+      });
+      writeEvent('response.content_part.done', {
+        type: 'response.content_part.done',
+        item_id: item.id,
+        output_index: outputIndex,
+        content_index: 0,
+        part: content
+      });
     }
-  });
-  writeEvent('response.content_part.added', {
-    type: 'response.content_part.added',
-    item_id: message.id,
-    output_index: 0,
-    content_index: 0,
-    part: {
-      ...content,
-      text: ''
-    }
-  });
-  writeEvent('response.output_text.delta', {
-    type: 'response.output_text.delta',
-    item_id: message.id,
-    output_index: 0,
-    content_index: 0,
-    delta: response.output_text
-  });
-  writeEvent('response.output_text.done', {
-    type: 'response.output_text.done',
-    item_id: message.id,
-    output_index: 0,
-    content_index: 0,
-    text: response.output_text
-  });
-  writeEvent('response.content_part.done', {
-    type: 'response.content_part.done',
-    item_id: message.id,
-    output_index: 0,
-    content_index: 0,
-    part: content
-  });
-  writeEvent('response.output_item.done', {
-    type: 'response.output_item.done',
-    output_index: 0,
-    item: message
-  });
+
+    writeEvent('response.output_item.done', {
+      type: 'response.output_item.done',
+      output_index: outputIndex,
+      item
+    });
+  }
   writeEvent('response.completed', {
     type: 'response.completed',
     response
@@ -355,6 +392,9 @@ const ResponsesRequestSchema = z
     input: z.unknown().optional(),
     instructions: z.string().optional(),
     stream: z.boolean().optional(),
+    tools: z.array(z.unknown()).optional(),
+    tool_choice: z.unknown().optional(),
+    parallel_tool_calls: z.boolean().optional(),
     metadata: z.record(z.unknown()).optional()
   })
   .passthrough()
@@ -364,7 +404,12 @@ const CodeRequestSchema = z.object({
   model: z.string().min(1).optional()
 });
 const RouteTestRequestSchema = z.object({
-  taskType: TaskTypeSchema.optional()
+  taskType: TaskTypeSchema.optional(),
+  routingProfileId: z.string().min(1).optional(),
+  codingTool: z.string().min(1).optional()
+});
+const ToolTestRequestSchema = z.object({
+  toolId: z.string().min(1)
 });
 const ProviderUpsertRequestSchema = z
   .object({
@@ -383,6 +428,15 @@ const ProfileImportRequestSchema = z.object({
 const ProviderSecretRequestSchema = z.object({
   id: ProviderIdSchema,
   apiKey: z.string().min(1)
+});
+const ProviderEnabledRequestSchema = z.object({
+  enabled: z.boolean()
+});
+const ConnectionTestRequestSchema = z.object({
+  prompt: z.string().min(1),
+  taskType: TaskTypeSchema.default('coding'),
+  codingTool: z.string().min(1).optional(),
+  routingProfileId: z.string().min(1).optional()
 });
 const RoutingProfileUpsertRequestSchema = z.object({
   id: z.string().trim().regex(providerIdPattern, 'Routing profile id must contain only letters, numbers, underscores, and dashes'),
@@ -560,7 +614,8 @@ function modelTags(providerId: string, model: string, provider: ModelMuleConfig[
 }
 
 const providerPresets: ProviderPreset[] = [
-  { id: 'openrouter', name: 'OpenRouter', type: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1', apiKeyEnv: 'OPENROUTER_API_KEY', model: 'openrouter/auto' },
+  { id: 'openrouter', name: 'OpenRouter', type: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1', apiKeyEnv: 'OPENROUTER_API_KEY', model: 'qwen/qwen3-coder:free' },
+  { id: 'openai_compatible', name: 'OpenAI-kompatible API', type: 'openai_compatible', baseUrl: 'https://api.openai.com/v1', apiKeyEnv: 'OPENAI_COMPATIBLE_API_KEY', model: 'gpt-4.1-mini' },
   { id: 'openai', name: 'OpenAI API', type: 'openai_compatible', baseUrl: 'https://api.openai.com/v1', apiKeyEnv: 'OPENAI_API_KEY', model: 'gpt-4.1-mini' },
   { id: 'anthropic', name: 'Anthropic Claude API', type: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', model: 'claude-3-5-sonnet-latest' },
   { id: 'gemini', name: 'Google Gemini API', type: 'openai_compatible', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', apiKeyEnv: 'GEMINI_API_KEY', model: 'gemini-1.5-flash' },
@@ -569,6 +624,7 @@ const providerPresets: ProviderPreset[] = [
   { id: 'deepseek', name: 'DeepSeek API', type: 'openai_compatible', baseUrl: 'https://api.deepseek.com/v1', apiKeyEnv: 'DEEPSEEK_API_KEY', model: 'deepseek-chat' },
   { id: 'ollama', name: 'Ollama lokal', type: 'ollama', baseUrl: 'http://127.0.0.1:11434', model: 'llama3.1:8b', isLocal: true },
   { id: 'lm_studio', name: 'LM Studio lokal', type: 'openai_compatible', baseUrl: 'http://127.0.0.1:1234/v1', model: 'local-model', isLocal: true },
+  { id: 'custom_api', name: 'Custom API', type: 'openai_compatible', baseUrl: 'https://example.local/v1', apiKeyEnv: 'CUSTOM_API_KEY', model: 'custom-model' },
   { id: 'chatgpt_account', name: 'ChatGPT Account-Abo', type: 'account_placeholder', note: 'Nur Hinweisbereich. Keine Cookie-, Scraping- oder inoffizielle Account-Automation.' },
   { id: 'claude_max_account', name: 'Claude Max Abo', type: 'account_placeholder', note: 'Nur Hinweisbereich. Keine Cookie-, Scraping- oder inoffizielle Account-Automation.' }
 ];
@@ -704,13 +760,13 @@ function codexModelFromConfig(config: ModelMuleConfig, routingProfileId?: string
     const profileModel = profile?.modelPreferences?.[providerId]?.[0];
     const providerModel = provider.models?.[0];
     if (profileModel || providerModel) {
-      return profileModel ?? providerModel;
+      return codexCompatibleModel(profileModel ?? providerModel, true) ?? OPENROUTER_FREE_CODING_MODEL;
     }
   }
 
   for (const provider of Object.values(config.providers ?? {})) {
     if (provider.enabled !== false && provider.type !== 'shell_command' && (!provider.apiKeyEnv || process.env[provider.apiKeyEnv]) && provider.models?.[0]) {
-      return provider.models[0];
+      return codexCompatibleModel(provider.models[0], true) ?? OPENROUTER_FREE_CODING_MODEL;
     }
   }
 
@@ -846,6 +902,29 @@ function errorResponse(error: unknown, type = 'validation_error') {
       type
     }
   };
+}
+
+function friendlyErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/missing env var|requires apiKeyEnv|api[-_ ]?key/i.test(message)) {
+    return 'API-Key fehlt';
+  }
+  if (/ollama/i.test(message) && /fetch|connect|ECONNREFUSED|failed/i.test(message)) {
+    return 'Ollama laeuft nicht';
+  }
+  if (/not found|command not found|ENOENT/i.test(message)) {
+    return 'Tool nicht installiert oder Provider nicht erreichbar';
+  }
+  if (/budget|request-limit|rate limit/i.test(message)) {
+    return 'Budget/Request-Limit erreicht';
+  }
+  if (/no provider|all providers failed/i.test(message)) {
+    return 'Alle Fallbacks fehlgeschlagen';
+  }
+  if (/fetch|ECONNREFUSED|ENOTFOUND|timeout|network/i.test(message)) {
+    return 'Provider nicht erreichbar';
+  }
+  return message;
 }
 
 export async function buildServer(options: BuildServerOptions = {}): Promise<{ app: FastifyInstance; service: ModelMuleService }> {
@@ -1090,6 +1169,44 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
   });
 
   app.get('/providers', routeRateLimit, async () => ({ providers: await service.listProviders() }));
+  app.get('/providers/:id/test', routeRateLimit, async (request, reply) => {
+    const params = request.params as { id?: string };
+
+    try {
+      const id = ProviderIdSchema.parse(params.id);
+      const providerConfig = config.providers[id];
+      if (!providerConfig) {
+        reply.code(404);
+        return { error: { message: `Provider '${id}' does not exist`, type: 'not_found' } };
+      }
+
+      if (providerConfig.apiKeyEnv && !process.env[providerConfig.apiKeyEnv]) {
+        return {
+          id,
+          ready: false,
+          status: 'einrichtung_noetig',
+          message: 'API-Key fehlt'
+        };
+      }
+
+      const provider = createProvider(id, providerConfig);
+      const health = await provider.healthCheck();
+      return {
+        id,
+        ready: health.healthy,
+        status: health.healthy ? 'bereit' : 'fehler',
+        message: health.message ?? (health.healthy ? 'Provider ist erreichbar' : 'Provider nicht erreichbar')
+      };
+    } catch (error) {
+      return {
+        id: params.id,
+        ready: false,
+        status: 'fehler',
+        message: friendlyErrorMessage(error),
+        rawMessage: error instanceof Error ? error.message : String(error)
+      };
+    }
+  });
   app.get('/models/catalog', routeRateLimit, async () => {
     const providerModels = await service.listModels();
     const entries = providerModels.flatMap(({ providerId, models }) => {
@@ -1270,6 +1387,36 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
       return errorResponse(error);
     }
   });
+  app.post('/tools/coding-ai/test', routeRateLimit, async (request, reply) => {
+    try {
+      const body = ToolTestRequestSchema.parse(request.body);
+      const tool = findCodingAi(body.toolId);
+      if (!tool) {
+        reply.code(404);
+        return {
+          error: {
+            message: `Unknown coding AI tool '${body.toolId}'`,
+            type: 'not_found'
+          }
+        };
+      }
+
+      const path = commandPath(tool.command);
+      const version = path ? commandVersion(tool.command) : undefined;
+      return {
+        toolId: tool.id,
+        installed: Boolean(path),
+        commandPath: path,
+        version,
+        message: path ? `${tool.name} ist installiert` : `${tool.name} ist nicht installiert`,
+        endpoint: 'http://127.0.0.1:43110/v1',
+        apiKeyHint: 'modelmule'
+      };
+    } catch (error) {
+      reply.code(400);
+      return errorResponse(error);
+    }
+  });
   app.post('/tools/coding-ai/connect', routeRateLimit, async (request, reply) => {
     try {
       const body = CodingAiConnectRequestSchema.parse(request.body);
@@ -1403,7 +1550,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
   app.get('/models', routeRateLimit, async () => ({ models: await service.listModels() }));
   app.get('/v1/models', routeRateLimit, async () => {
     const providers = await service.listModels();
-    const models = providers.flatMap((provider) => provider.models.map((model) => toCodexModelInfo(provider.providerId, model)));
+    const models = providers.flatMap((provider) => codexDiscoveryModels(provider.models).map((model) => toCodexModelInfo(provider.providerId, model)));
     return {
       object: 'list',
       data: models,
@@ -1468,11 +1615,49 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
     try {
       const body = RouteTestRequestSchema.parse(request.body ?? {});
       return service.inspectRoute({
-        taskType: body.taskType
+        taskType: body.taskType,
+        metadata: {
+          ...(body.codingTool ? { codingTool: body.codingTool } : {}),
+          ...(body.routingProfileId ? { routingProfileId: body.routingProfileId } : {})
+        }
       });
     } catch (error) {
       reply.code(400);
       return errorResponse(error, 'routing_error');
+    }
+  });
+
+  app.post('/test/run', routeRateLimit, async (request, reply) => {
+    try {
+      const body = ConnectionTestRequestSchema.parse(request.body);
+      const routed = await service.chat({
+        taskType: body.taskType,
+        messages: [{ role: 'user', content: body.prompt }],
+        metadata: {
+          ...(body.codingTool ? { codingTool: body.codingTool } : {}),
+          ...(body.routingProfileId ? { routingProfileId: body.routingProfileId } : {})
+        }
+      });
+
+      return {
+        ok: true,
+        response: routed.response.content,
+        provider: routed.usedProvider,
+        model: routed.response.model,
+        fallbackChain: routed.fallbackChain,
+        routingProfileId: routed.routingProfileId,
+        codingTool: routed.codingTool
+      };
+    } catch (error) {
+      reply.code(502);
+      return {
+        ok: false,
+        error: {
+          message: friendlyErrorMessage(error),
+          rawMessage: error instanceof Error ? error.message : String(error),
+          type: 'provider_error'
+        }
+      };
     }
   });
 
@@ -1535,6 +1720,42 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
           routing: {
             ...config.routing,
             tasks
+          }
+        }))
+      };
+    } catch (error) {
+      reply.code(400);
+      return errorResponse(error);
+    }
+  });
+
+  app.post('/config/provider/:id/enabled', routeRateLimit, async (request, reply) => {
+    const params = request.params as { id?: string };
+
+    try {
+      const id = ProviderIdSchema.parse(params.id);
+      const body = ProviderEnabledRequestSchema.parse(request.body);
+      const provider = config.providers[id];
+      if (!provider) {
+        reply.code(404);
+        return {
+          error: {
+            message: `Provider '${id}' does not exist`,
+            type: 'not_found'
+          }
+        };
+      }
+
+      return {
+        path: configPath,
+        config: safeConfig(applyConfig({
+          ...config,
+          providers: {
+            ...config.providers,
+            [id]: {
+              ...provider,
+              enabled: body.enabled
+            }
           }
         }))
       };
@@ -1616,9 +1837,12 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
       const effectiveCodingTool = codingTool ?? 'codex';
       const excludedProviderIds = [findCodingAi(effectiveCodingTool)?.defaultProviderId].filter((providerId): providerId is string => Boolean(providerId));
       const routed = await service.chat({
-        model: body.model,
+        model: codexCompatibleModel(body.model, Boolean(body.tools?.length)),
         messages,
         taskType: 'coding',
+        tools: body.tools,
+        toolChoice: body.tool_choice,
+        parallelToolCalls: body.parallel_tool_calls,
         metadata: {
           ...(body.metadata ?? {}),
           codingTool: effectiveCodingTool,
@@ -1630,6 +1854,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
         id: routed.response.id,
         model: routed.response.model,
         content: routed.response.content,
+        toolCalls: routed.response.toolCalls,
         promptTokens: routed.response.usage.promptTokens,
         completionTokens: routed.response.usage.completionTokens,
         usedProvider: routed.usedProvider,
