@@ -1,160 +1,102 @@
 # ModelMule
 
-ModelMule is a local AI routing layer for developer tooling. It exposes one OpenAI-compatible interface on your machine and routes requests to the right model provider based on privacy, budget, priority, and fallback rules.
+ModelMule is a local compatibility layer for AI-enabled developer tools. It exposes a small OpenAI-compatible API on the local machine and forwards requests to configured, authorized providers according to local policy.
 
-It is designed for teams and individual developers who want a stable local endpoint for editors, agents, scripts, and internal tools without hardwiring every integration to a single model vendor.
+The project is intended for development environments where configuration, provider selection, usage visibility, and local privacy controls should be handled in one place.
 
-## What It Does
+## Status
 
-- Runs a local API server on `http://127.0.0.1:43110`
-- Accepts OpenAI-style chat completion requests
-- Routes requests across multiple AI providers
-- Supports privacy-first local routing with Ollama or shell-based tools
-- Applies provider priority, daily budget, and request-limit constraints
-- Falls back automatically when a provider fails
-- Tracks usage, errors, and fallback events in local SQLite storage
-- Includes a CLI for setup, operations, and diagnostics
+ModelMule is early-stage software. The current codebase provides a working local server, CLI, provider abstraction, routing engine, fallback behavior, and SQLite usage tracking.
 
-## Why Use It
+Public interfaces may still change before a stable `1.0` release. Configuration and API changes should be documented in this repository as they are introduced.
 
-Most coding tools assume a single model API. That creates vendor lock-in, weak failure handling, and poor operational visibility.
+## Scope
 
-ModelMule solves that by placing a local control plane between your tools and your providers:
+ModelMule is designed for:
 
-- One endpoint for many tools
-- One routing policy for many providers
-- One local usage record across cloud and local models
-- One fallback path when a provider is unavailable
+- local development workflows
+- provider-authorized API usage
+- OpenAI-compatible client integration
+- local and cloud provider configuration
+- usage tracking and operational diagnostics
+- privacy-oriented local routing policies
 
-## Product Positioning
+ModelMule should only be used with services, credentials, models, and local commands that the operator is authorized to use. Local routing, fallback, and reporting features are operational controls; they do not override provider terms, quotas, billing rules, or access restrictions.
 
-ModelMule is not a hosted gateway and not a prompt playground. It is a local infrastructure component for AI-enabled developer workflows.
+## Features
 
-Typical use cases:
-
-- Point coding agents at one stable OpenAI-compatible base URL
-- Prefer local inference for sensitive work
-- Use cloud models only when quality or context length requires it
-- Cap daily spend per provider
-- Keep working through rate limits or provider outages
-
-## Core Capabilities
-
-### Local OpenAI-Compatible API
-
-ModelMule provides:
-
-- `POST /v1/chat/completions`
-- `POST /v1/code`
-- `GET /health`
-- `GET /providers`
-- `GET /models`
-- `GET /usage`
-- `POST /route/test`
-
-This allows existing OpenAI-compatible clients to talk to ModelMule without provider-specific integration logic.
-
-### Provider Routing
-
-Requests can be routed by:
-
-- default mode
-- task type
-- provider priority
-- privacy mode
-- daily budget limits
-- daily request limits
-- configured provider preference order
-
-If the first provider fails, ModelMule automatically tries the next eligible provider.
-
-### Local Usage Tracking
-
-Usage is persisted in SQLite and includes:
-
-- request counts
-- token counts
-- estimated cost
-- provider errors
-- fallback events
-- frequently used models
-
-## Supported Provider Types
-
-- `openrouter`
-- `ollama`
-- `openai_compatible`
-- `anthropic`
-- `shell_command`
-
-See [PROVIDERS.md](./PROVIDERS.md) for provider-specific settings.
+- Local Fastify server on `http://127.0.0.1:43110`
+- OpenAI-compatible `POST /v1/chat/completions`
+- Simple coding helper endpoint at `POST /v1/code`
+- Provider support for OpenRouter, Ollama, OpenAI-compatible APIs, Anthropic, and local shell commands
+- Routing by task type, provider priority, privacy mode, daily budget, and daily request limits
+- Provider fallback when an eligible provider call fails
+- Route preview endpoint for diagnostics
+- SQLite usage store for requests, costs, errors, models, and fallback events
+- CLI for initialization, server startup, provider diagnostics, usage reporting, and route inspection
 
 ## Quickstart
 
-### 1. Install
+Install dependencies:
 
-See [INSTALL.md](./INSTALL.md).
+```bash
+corepack enable
+corepack prepare pnpm@10.22.0 --activate
+pnpm install --no-frozen-lockfile
+```
 
-### 2. Initialize Configuration
+Initialize the default configuration:
 
 ```bash
 pnpm --filter @modelmule/cli dev init
 ```
 
-This creates the default config at `~/.modelmule/config.yaml`.
-
-### 3. Configure Providers
-
-Example:
-
-```yaml
-providers:
-  openrouter_main:
-    type: openrouter
-    apiKeyEnv: OPENROUTER_API_KEY
-    priority: 80
-    dailyBudgetUsd: 2.0
-    models:
-      - openrouter/auto
-
-  ollama_local:
-    type: ollama
-    baseUrl: http://127.0.0.1:11434
-    priority: 60
-    isLocal: true
-    models:
-      - llama3.1:8b
-
-routing:
-  defaultMode: balanced
-  privacyMode: false
-  tasks:
-    coding:
-      prefer:
-        - openrouter_main
-        - ollama_local
-```
-
-More details: [CONFIG.md](./CONFIG.md)
-
-### 4. Start the Server
+Start the local server:
 
 ```bash
 pnpm --filter @modelmule/cli dev serve
 ```
 
-### 5. Point Your Tool at ModelMule
+Use the local OpenAI-compatible base URL:
 
-Use:
+```text
+http://127.0.0.1:43110/v1
+```
 
-- `base_url=http://127.0.0.1:43110/v1`
-- `api_key=dummy-local-key`
+Most local clients still require an API key field. For ModelMule itself, any placeholder value is sufficient unless the client enforces its own validation.
 
-Your tool now talks to ModelMule, and ModelMule decides which provider should handle the request.
+## API
+
+Available endpoints:
+
+- `GET /health`
+- `GET /providers`
+- `GET /models`
+- `GET /usage`
+- `POST /route/test`
+- `POST /v1/chat/completions`
+- `POST /v1/code`
+
+Example request:
+
+```bash
+curl -s http://127.0.0.1:43110/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{
+    "model": "openrouter/auto",
+    "taskType": "coding",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Write a small TypeScript function."
+      }
+    ]
+  }'
+```
 
 ## CLI
 
-Examples:
+Common commands:
 
 ```bash
 modelmule init
@@ -174,62 +116,81 @@ modelmule config edit
 modelmule route test coding
 ```
 
-More examples: [EXAMPLES.md](./EXAMPLES.md)
+## Configuration
 
-## Routing Modes
+The default configuration path is:
 
-ModelMule currently supports:
+```text
+~/.modelmule/config.yaml
+```
 
-- `cheapest`
-- `balanced`
-- `premium`
-- `local-only`
-- `coding-max`
-- `free-first`
+Override it with:
 
-Task types can further refine routing behavior:
+```bash
+MODELMULE_CONFIG_PATH=/custom/path/config.yaml
+```
 
-- `coding`
-- `refactor`
-- `debugging`
-- `planning`
-- `cheap-chat`
-- `long-context`
-- `local-private`
-- `premium-reasoning`
+See [CONFIG.md](./CONFIG.md) for the schema, examples, routing modes, and environment variables.
+
+## Providers
+
+Supported provider types:
+
+- `openrouter`
+- `ollama`
+- `openai_compatible`
+- `anthropic`
+- `shell_command`
+
+Provider-specific details are documented in [PROVIDERS.md](./PROVIDERS.md).
 
 ## Architecture
 
-Monorepo structure:
+Repository layout:
 
 - `apps/cli`: command-line interface
 - `apps/server`: local Fastify API server
-- `packages/config`: config loading and validation
-- `packages/core`: routing, service logic, storage
-- `packages/providers`: provider runtimes
+- `packages/config`: configuration loading and validation
+- `packages/core`: routing, service logic, and SQLite storage
+- `packages/providers`: provider runtime implementations
 - `tests`: routing, fallback, config, and endpoint coverage
 
-## Safety and Scope
+The intended extension points are provider runtimes, routing policy, storage reporting, and additional local diagnostics.
 
-ModelMule is intended for legal, explicit, provider-supported usage only.
+## Development
 
-It does not include:
+Build:
 
-- subscription bypassing
-- hidden login automation
-- CAPTCHA evasion
-- scraping around provider controls
-- unauthorized access to commercial model endpoints
+```bash
+pnpm build
+```
 
-## Current Status
+Test:
 
-ModelMule is an early-stage local infrastructure project with a working MVP foundation:
+```bash
+pnpm test
+```
 
-- local server
-- CLI
-- provider abstraction
-- routing engine
-- fallback logic
-- usage storage
+More setup details are available in [INSTALL.md](./INSTALL.md).
 
-The product surface is already usable for experimentation and internal workflows, but it should still be treated as actively evolving software.
+## Compatibility Notes
+
+- Runtime target: Node.js `>=20`
+- Package manager: `pnpm`
+- Local database: SQLite through `better-sqlite3`
+- Primary API shape: OpenAI-compatible chat completions
+- Configuration format: YAML
+
+## Roadmap
+
+Near-term areas for improvement:
+
+- stronger request and response validation
+- clearer error codes for clients
+- provider capability metadata
+- richer usage reports
+- migration handling for configuration and storage changes
+- documented release process
+- optional authentication for local deployments that need it
+
+The roadmap is intentionally operational: changes should improve reliability, transparency, and maintainability without weakening provider terms or local policy boundaries.

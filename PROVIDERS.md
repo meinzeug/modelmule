@@ -1,6 +1,10 @@
-# PROVIDERS
+# Providers
 
-## Unterstützte Provider-Typen
+Providers are configured backends that ModelMule can call through a common runtime interface.
+
+All providers must be used according to their own terms, credentials, quotas, and operational limits. ModelMule only applies local policy and forwarding behavior.
+
+## Supported Types
 
 - `openrouter`
 - `ollama`
@@ -8,36 +12,146 @@
 - `anthropic`
 - `shell_command`
 
-## Gemeinsame Felder
+## Common Fields
 
-- `type`
-- `priority`
-- `dailyRequestLimit` (optional)
-- `dailyBudgetUsd` (optional)
-- `models` (optional)
-- `isLocal` (optional)
+- `type`: provider type
+- `priority`: integer from `0` to `100`
+- `dailyRequestLimit`: optional local request cap
+- `dailyBudgetUsd`: optional local budget cap
+- `models`: optional list of model IDs
+- `isLocal`: optional explicit local-provider flag
+- `apiKeyEnv`: optional environment variable name for API keys
+- `baseUrl`: optional provider base URL
 
 ## OpenRouter
 
-- `apiKeyEnv` nötig (z. B. `OPENROUTER_API_KEY`)
-- optional `baseUrl` (default: `https://openrouter.ai/api/v1`)
+Example:
+
+```yaml
+openrouter_main:
+  type: openrouter
+  apiKeyEnv: OPENROUTER_API_KEY
+  baseUrl: https://openrouter.ai/api/v1
+  priority: 80
+  dailyBudgetUsd: 2.0
+  models:
+    - openrouter/auto
+```
+
+Notes:
+
+- `apiKeyEnv` is required for chat requests.
+- `baseUrl` defaults to `https://openrouter.ai/api/v1`.
+- Model listing uses the configured `models` list when provided.
 
 ## Ollama
 
-- optional `baseUrl` (default: `http://127.0.0.1:11434`)
-- für Privacy-Workloads als `isLocal: true`
+Example:
 
-## OpenAI-kompatibel
+```yaml
+ollama_local:
+  type: ollama
+  baseUrl: http://127.0.0.1:11434
+  priority: 60
+  isLocal: true
+  models:
+    - llama3.1:8b
+```
 
-- `baseUrl` und optional `apiKeyEnv`
+Notes:
+
+- `baseUrl` defaults to `http://127.0.0.1:11434`.
+- Ollama is treated as local by default.
+- The Ollama service must be running separately.
+
+## OpenAI-Compatible
+
+Example:
+
+```yaml
+openai_compatible_main:
+  type: openai_compatible
+  baseUrl: https://api.openai.com/v1
+  apiKeyEnv: OPENAI_API_KEY
+  priority: 75
+  models:
+    - gpt-4.1-mini
+```
+
+Notes:
+
+- `baseUrl` should point to a regular OpenAI-compatible API.
+- `apiKeyEnv` is optional for local gateways, but most hosted APIs require it.
+- Requests use the OpenAI chat completions shape.
 
 ## Anthropic
 
-- `apiKeyEnv` nötig
-- optional `baseUrl` (default: `https://api.anthropic.com`)
+Example:
 
-## ShellCommand
+```yaml
+anthropic_main:
+  type: anthropic
+  apiKeyEnv: ANTHROPIC_API_KEY
+  priority: 75
+  models:
+    - claude-3-5-sonnet-latest
+```
 
-- `command` nötig
-- optional `args`
-- für lokal installierte CLI-Tools
+Notes:
+
+- `apiKeyEnv` is required for chat requests.
+- `baseUrl` defaults to `https://api.anthropic.com`.
+- ModelMule converts local chat messages into the provider request shape used by this runtime.
+
+## Shell Command
+
+Example:
+
+```yaml
+local_command:
+  type: shell_command
+  command: /bin/cat
+  args: []
+  priority: 40
+  isLocal: true
+  models:
+    - shell-command-model
+```
+
+Notes:
+
+- `command` is required.
+- The command receives the prompt on stdin.
+- Shell command providers are treated as local by default.
+- Only configure commands that are safe and appropriate for your environment.
+
+## Health Checks
+
+The `modelmule providers test` command calls provider health checks through the local server.
+
+Health checks are best-effort diagnostics. A healthy response means the runtime can perform its configured check, not that every future model request is guaranteed to succeed.
+
+## Model Listing
+
+Model lists are sourced from provider configuration when `models` is set. Some providers can query their remote or local API when no static model list is configured.
+
+Prefer explicit `models` lists for predictable local behavior.
+
+## Adding Provider Types
+
+Provider implementations live in `packages/providers`.
+
+A provider runtime must implement:
+
+- `listModels()`
+- `healthCheck()`
+- `chat(request)`
+
+It should also define whether it is local, how it resolves models, and how it reports usage when the upstream API provides usage fields.
+
+## Operational Boundaries
+
+- Do not put API keys directly in config files.
+- Do not configure providers for services you are not authorized to use.
+- Do not rely on local limits as a substitute for provider-side controls.
+- Review shell commands carefully before sharing configuration.
