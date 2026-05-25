@@ -296,7 +296,7 @@ export const dashboardHtml = `<!doctype html>
           <section class="wizard-step-panel" data-wizard-panel="3" hidden>
             <p class="eyebrow">Schritt 4</p>
             <h3>Verbinden und testen</h3>
-            <p class="muted">Der Assistent speichert jetzt Anbieter, Modellpraeferenz und Tool-Zuweisung. Danach traegst du diese Werte in deiner Coding-AI ein.</p>
+            <p class="muted">Der Assistent speichert jetzt Anbieter, Modellpraeferenz und Tool-Zuweisung. Bei Codex wird die lokale Codex-Konfiguration automatisch auf ModelMule gesetzt.</p>
             <pre id="tool-command-output" class="output compact-output"></pre>
           </section>
         </form>
@@ -1284,14 +1284,18 @@ function updateWizardHints() {
     : 'Waehle ein Profil aus.';
 
   const hints = clientEnvHintsByTool[toolId] || ['OPENAI_BASE_URL=http://127.0.0.1:43110/v1', 'OPENAI_API_KEY=modelmule'];
-  $('#tool-command-output').textContent = [
+  const lines = [
     'Trage diese Werte in deiner Coding-AI ein:',
     'Base URL: http://127.0.0.1:43110/v1',
     'API-Key: modelmule',
     '',
     'Als Umgebungsvariablen:',
     ...hints
-  ].join('\\n');
+  ];
+  if (toolId === 'codex') {
+    lines.unshift('Codex wird beim Anwenden automatisch in ~/.codex/config.toml auf ModelMule gesetzt.', '');
+  }
+  $('#tool-command-output').textContent = lines.join('\\n');
 }
 
 function renderSetupAssistant() {
@@ -1478,11 +1482,11 @@ function renderCodingAiList() {
       event.preventDefault();
       const toolId = form.getAttribute('data-connect-form');
       const providerId = optionalString(form.querySelector('input[name="providerId"]').value);
-      await api('/tools/coding-ai/connect', {
+      const result = await api('/tools/coding-ai/connect', {
         method: 'POST',
         body: JSON.stringify({ toolId, providerId })
       });
-      showToast('Tool wurde als Provider verbunden und im Coding-Routing eingetragen');
+      showToast(result.codexConfig ? 'Codex wurde automatisch mit ModelMule verbunden' : 'Tool wurde als Provider verbunden und im Coding-Routing eingetragen');
       await loadAll();
     });
   });
@@ -1678,7 +1682,7 @@ async function applySetupWizard() {
   }
 
   form.elements.apiKey.value = '';
-  showToast('Setup angewendet');
+  showToast(result.codexConfig ? 'Setup angewendet und Codex automatisch verbunden' : 'Setup angewendet');
   closeSetupWizard();
   await loadAll();
 }

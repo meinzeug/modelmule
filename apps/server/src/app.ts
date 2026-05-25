@@ -1,5 +1,8 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import rateLimit from '@fastify/rate-limit';
 import { z, ZodError } from 'zod';
 import {
@@ -73,10 +76,132 @@ function toOpenAIResponse(input: {
   };
 }
 
+function responseContentToText(content: unknown): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  if (Array.isArray(content)) {
+    return content.map((part) => responseContentToText(part)).filter(Boolean).join('\n');
+  }
+
+  if (content && typeof content === 'object') {
+    const part = content as Record<string, unknown>;
+    if (typeof part.text === 'string') {
+      return part.text;
+    }
+    if (typeof part.input_text === 'string') {
+      return part.input_text;
+    }
+    if (typeof part.output_text === 'string') {
+      return part.output_text;
+    }
+    if ('content' in part) {
+      return responseContentToText(part.content);
+    }
+  }
+
+  return '';
+}
+
+function responseRoleToChatRole(role: unknown): ChatMessage['role'] {
+  if (role === 'assistant' || role === 'tool' || role === 'user') {
+    return role;
+  }
+  return 'system';
+}
+
+function responsesInputToChatMessages(input: { instructions?: string; input?: unknown }): ChatMessage[] {
+  const messages: ChatMessage[] = [];
+
+  if (input.instructions?.trim()) {
+    messages.push({ role: 'system', content: input.instructions.trim() });
+  }
+
+  if (typeof input.input === 'string' && input.input.trim()) {
+    messages.push({ role: 'user', content: input.input.trim() });
+  } else if (Array.isArray(input.input)) {
+    for (const item of input.input) {
+      if (typeof item === 'string' && item.trim()) {
+        messages.push({ role: 'user', content: item.trim() });
+        continue;
+      }
+
+      if (!item || typeof item !== 'object') {
+        continue;
+      }
+
+      const inputItem = item as Record<string, unknown>;
+      const content = responseContentToText(inputItem.content ?? inputItem.text ?? inputItem.input_text).trim();
+      if (content) {
+        messages.push({ role: responseRoleToChatRole(inputItem.role), content });
+      }
+    }
+  } else {
+    const content = responseContentToText(input.input).trim();
+    if (content) {
+      messages.push({ role: 'user', content });
+    }
+  }
+
+  return messages;
+}
+
+function toResponsesApiResponse(input: {
+  id: string;
+  model: string;
+  content: string;
+  promptTokens: number;
+  completionTokens: number;
+  usedProvider: string;
+  fallbackChain: string[];
+  routingProfileId?: string;
+  codingTool?: string;
+}) {
+  const created = Math.floor(Date.now() / 1000);
+  return {
+    id: input.id,
+    object: 'response',
+    created_at: created,
+    status: 'completed',
+    model: input.model,
+    output: [
+      {
+        id: `${input.id}-message`,
+        type: 'message',
+        status: 'completed',
+        role: 'assistant',
+        content: [
+          {
+            type: 'output_text',
+            text: input.content,
+            annotations: []
+          }
+        ]
+      }
+    ],
+    output_text: input.content,
+    usage: {
+      input_tokens: input.promptTokens,
+      output_tokens: input.completionTokens,
+      total_tokens: input.promptTokens + input.completionTokens
+    },
+    metadata: {
+      modelmule: {
+        usedProvider: input.usedProvider,
+        fallbackChain: input.fallbackChain,
+        routingProfileId: input.routingProfileId,
+        codingTool: input.codingTool
+      }
+    }
+  };
+}
+
 export interface BuildServerOptions {
   configPath?: string;
   dbPath?: string;
   apiKey?: string;
+  codexConfigPath?: string;
 }
 
 const providerIdPattern = /^[A-Za-z0-9_-]+$/;
@@ -91,6 +216,15 @@ const ChatCompletionRequestSchema = z.object({
   taskType: TaskTypeSchema.optional(),
   metadata: z.record(z.unknown()).optional()
 });
+const ResponsesRequestSchema = z
+  .object({
+    model: z.string().min(1).optional(),
+    input: z.unknown().optional(),
+    instructions: z.string().optional(),
+    metadata: z.record(z.unknown()).optional()
+  })
+  .passthrough()
+  .refine((value) => value.input !== undefined || Boolean(value.instructions?.trim()), { message: 'input or instructions is required' });
 const CodeRequestSchema = z.object({
   prompt: z.string().min(1),
   model: z.string().min(1).optional()
@@ -317,6 +451,90 @@ function presetProviderId(presetId: string): string {
 function inferEnvName(providerId: string): string {
   const normalized = providerId.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
   return `MODELMULE_${normalized || 'PROVIDER'}_API_KEY`;
+}
+
+function resolveCodexConfigPath(configPath?: string): string {
+  if (configPath) {
+    return configPath;
+  }
+  const codexHome = process.env.CODEX_HOME ?? join(homedir(), '.codex');
+  return join(codexHome, 'config.toml');
+}
+
+function tomlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function withoutTopLevelKeys(content: string, keys: string[]): string {
+  const keySet = new Set(keys);
+  let inTable = false;
+  return content
+    .split('\n')
+    .filter((line) => {
+      if (/^\s*\[/.test(line)) {
+        inTable = true;
+      }
+      if (inTable) {
+        return true;
+      }
+      const match = line.match(/^\s*([A-Za-z0-9_-]+)\s*=/);
+      return !match || !keySet.has(match[1]);
+    })
+    .join('\n');
+}
+
+function withoutTomlTable(content: string, tableName: string): string {
+  const lines = content.split('\n');
+  const result: string[] = [];
+  let skipping = false;
+
+  for (const line of lines) {
+    const tableMatch = line.match(/^\s*\[([^\]]+)]\s*$/);
+    if (tableMatch) {
+      skipping = tableMatch[1].trim() === tableName;
+      if (skipping) {
+        continue;
+      }
+    }
+    if (!skipping) {
+      result.push(line);
+    }
+  }
+
+  return result.join('\n');
+}
+
+function upsertCodexModelMuleProvider(configPath?: string): { path: string; backupPath?: string; providerId: string; model: string } {
+  const path = resolveCodexConfigPath(configPath);
+  const existing = existsSync(path) ? readFileSync(path, 'utf8') : '';
+  const dir = dirname(path);
+  mkdirSync(dir, { recursive: true });
+
+  let backupPath: string | undefined;
+  if (existing.trim().length > 0) {
+    backupPath = join(dir, `config.toml.modelmule-backup-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+    writeFileSync(backupPath, existing, 'utf8');
+  }
+
+  const providerId = 'modelmule';
+  const model = 'openrouter/auto';
+  const cleaned = withoutTomlTable(withoutTopLevelKeys(existing, ['model_provider', 'model']), `model_providers.${providerId}`).trim();
+  const modelMuleBlock = [
+    '# Added by ModelMule. Codex will send model requests to the local ModelMule router.',
+    `model_provider = ${tomlString(providerId)}`,
+    `model = ${tomlString(model)}`,
+    '',
+    `[model_providers.${providerId}]`,
+    `name = ${tomlString('ModelMule')}`,
+    `base_url = ${tomlString('http://127.0.0.1:43110/v1')}`,
+    `wire_api = ${tomlString('responses')}`,
+    ''
+  ].join('\n');
+
+  const nextContent = cleaned ? `${modelMuleBlock}\n${cleaned}\n` : `${modelMuleBlock}\n`;
+  writeFileSync(path, nextContent, 'utf8');
+
+  return { path, backupPath, providerId, model };
 }
 
 function setupStatus(config: ModelMuleConfig) {
@@ -596,6 +814,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
             }
           }
         : config.codingAiTools;
+      const codexConfig = body.codingToolId === 'codex' ? upsertCodexModelMuleProvider(options.codexConfigPath) : undefined;
 
       const nextConfig = applyConfig({
         ...config,
@@ -622,6 +841,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
         apiKeyEnv: provider.apiKeyEnv,
         routingProfileId,
         codingToolId: body.codingToolId,
+        codexConfig,
         status: setupStatus(nextConfig),
         config: safeConfig(nextConfig)
       };
@@ -843,7 +1063,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
         ? currentCodingPrefer
         : [...currentCodingPrefer, providerId];
 
-      applyConfig({
+      const nextConfig = applyConfig({
         ...config,
         providers: {
           ...config.providers,
@@ -859,10 +1079,13 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
           }
         }
       });
+      const codexConfig = tool.id === 'codex' ? upsertCodexModelMuleProvider(options.codexConfigPath) : undefined;
 
       return {
         providerId,
         toolId: tool.id,
+        codexConfig,
+        status: setupStatus(nextConfig),
         configPath
       };
     } catch (error) {
@@ -1064,6 +1287,53 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
       });
 
       return toOpenAIResponse({
+        id: routed.response.id,
+        model: routed.response.model,
+        content: routed.response.content,
+        promptTokens: routed.response.usage.promptTokens,
+        completionTokens: routed.response.usage.completionTokens,
+        usedProvider: routed.usedProvider,
+        fallbackChain: routed.fallbackChain,
+        routingProfileId: routed.routingProfileId,
+        codingTool: routed.codingTool
+      });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        reply.code(400);
+        return errorResponse(error, 'invalid_request');
+      }
+      reply.code(502);
+      return errorResponse(error, 'provider_error');
+    }
+  });
+
+  app.post('/v1/responses', routeRateLimit, async (request, reply) => {
+    try {
+      const body = ResponsesRequestSchema.parse(request.body);
+      const messages = responsesInputToChatMessages(body);
+      if (!messages.length) {
+        reply.code(400);
+        return {
+          error: {
+            message: 'Responses request must contain text input',
+            type: 'invalid_request'
+          }
+        };
+      }
+
+      const codingToolHeader = request.headers['x-modelmule-tool'];
+      const codingTool = Array.isArray(codingToolHeader) ? codingToolHeader[0] : codingToolHeader;
+      const routed = await service.chat({
+        model: body.model,
+        messages,
+        taskType: 'coding',
+        metadata: {
+          ...(body.metadata ?? {}),
+          ...(codingTool ? { codingTool } : { codingTool: 'codex' })
+        }
+      });
+
+      return toResponsesApiResponse({
         id: routed.response.id,
         model: routed.response.model,
         content: routed.response.content,

@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -9,6 +9,7 @@ const tempDir = mkdtempSync(join(tmpdir(), 'modelmule-test-'));
 const configPath = join(tempDir, 'config.yaml');
 const dbPath = join(tempDir, 'usage.db');
 const authDbPath = join(tempDir, 'auth-usage.db');
+const codexConfigPath = join(tempDir, 'codex', 'config.toml');
 
 const testConfig: ModelMuleConfig = {
   schemaVersion: 1,
@@ -36,8 +37,8 @@ const testConfig: ModelMuleConfig = {
 
 saveConfig(testConfig, configPath);
 
-const setup = await buildServer({ configPath, dbPath });
-const authSetup = await buildServer({ configPath, dbPath: authDbPath, apiKey: 'secret-token' });
+const setup = await buildServer({ configPath, dbPath, codexConfigPath });
+const authSetup = await buildServer({ configPath, dbPath: authDbPath, apiKey: 'secret-token', codexConfigPath: join(tempDir, 'auth-codex', 'config.toml') });
 
 afterAll(async () => {
   await setup.app.close();
@@ -77,6 +78,37 @@ describe('openai compatible endpoint', () => {
     expect(body.object).toBe('chat.completion');
     expect(body.choices[0].message.content).toContain('user: hello modelmule');
     expect(body.metadata.modelmule.usedProvider).toBe('shell_local');
+  });
+
+  it('returns Responses API style output for Codex custom providers', async () => {
+    const response = await setup.app.inject({
+      method: 'POST',
+      url: '/v1/responses',
+      payload: {
+        model: 'openrouter/auto',
+        instructions: 'You are connected through Codex.',
+        input: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'input_text',
+                text: 'hello from codex'
+              }
+            ]
+          }
+        ]
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.object).toBe('response');
+    expect(body.output[0].content[0]).toMatchObject({
+      type: 'output_text'
+    });
+    expect(body.output_text).toContain('hello from codex');
+    expect(body.metadata.modelmule.codingTool).toBe('codex');
   });
 
   it('returns model catalog entries with free/local tags', async () => {
@@ -270,6 +302,31 @@ describe('openai compatible endpoint', () => {
     });
   });
 
+  it('connects Codex CLI by writing Codex config.toml', async () => {
+    const response = await setup.app.inject({
+      method: 'POST',
+      url: '/tools/coding-ai/connect',
+      payload: {
+        toolId: 'codex'
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.codexConfig).toMatchObject({
+      path: codexConfigPath,
+      providerId: 'modelmule',
+      model: 'openrouter/auto'
+    });
+
+    const codexConfig = readFileSync(codexConfigPath, 'utf8');
+    expect(codexConfig).toContain('model_provider = "modelmule"');
+    expect(codexConfig).toContain('model = "openrouter/auto"');
+    expect(codexConfig).toContain('[model_providers.modelmule]');
+    expect(codexConfig).toContain('base_url = "http://127.0.0.1:43110/v1"');
+    expect(codexConfig).toContain('wire_api = "responses"');
+  });
+
   it('creates a config backup before server-side config writes', async () => {
     const response = await setup.app.inject({
       method: 'GET',
@@ -330,6 +387,7 @@ describe('openai compatible endpoint', () => {
     expect(body.config.providers.quick_openrouter.apiKeyEnv).toBe('OPENROUTER_API_KEY');
     expect(JSON.stringify(body)).not.toContain('test-openrouter-key');
     expect(body.config.codingAiTools.codex.routingProfileId).toBe('free_first');
+    expect(body.codexConfig.path).toBe(codexConfigPath);
     expect(body.status.steps.some((step: { id: string; done: boolean }) => step.id === 'provider' && step.done)).toBe(true);
   });
 
