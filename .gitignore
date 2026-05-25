@@ -1,4 +1,5 @@
 node_modules
 **/dist
+dist-linux
 **/*.tsbuildinfo
 .DS_Store

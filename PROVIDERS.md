@@ -205,6 +205,26 @@ A provider runtime must implement:
 
 It should also define whether it is local, how it resolves models, and how it reports usage when the upstream API provides usage fields.
 
+Minimal implementation shape:
+
+```ts
+class ExampleProvider extends BaseProvider {
+  async listModels() {
+    return ['example-model'];
+  }
+
+  async healthCheck() {
+    return { healthy: true };
+  }
+
+  async chat(request) {
+    return createResponse('example-model', 'response');
+  }
+}
+```
+
+Provider capability scoring is exposed through `/providers` under the `capabilities` field. The score currently combines priority, health, locality, static model configuration, and local limits.
+
 ## Operational Boundaries
 
 - Do not put API keys directly in config files.

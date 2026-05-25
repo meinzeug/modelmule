@@ -138,6 +138,7 @@ Unknown task types are normalized to `coding`.
 
 ## Environment Variables
 
+- `MODELMULE_API_KEY`: optional local API token required by API/config endpoints
 - `MODELMULE_CONFIG_PATH`: override config file path
 - `MODELMULE_DB_PATH`: override SQLite database path
 - `MODELMULE_HOST`: server host, default `127.0.0.1`
@@ -178,3 +179,27 @@ The CLI and local web console can add templates for common provider setups:
 - Use `modelmule route test <taskType>` to inspect routing decisions before sending real requests.
 - Server-side config writes create timestamped backups in the config backup directory.
 - Treat config changes as operational changes and review them before shared deployments.
+
+## Migration Status
+
+Config files include a `schemaVersion`. The local API reports migration status through:
+
+```text
+GET /system/status
+```
+
+SQLite storage records applied migrations in `schema_migrations` and exposes the same status endpoint.
+
+## Provider Profiles
+
+Provider profiles can be exported and imported as JSON:
+
+```bash
+modelmule profiles export providers.json
+modelmule profiles import providers.json
+```
+
+Server endpoints:
+
+- `GET /profiles/export`
+- `POST /profiles/import`

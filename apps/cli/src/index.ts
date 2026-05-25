@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { Command } from 'commander';
 import { buildServer } from '@modelmule/server';
 import {
   defaultConfig,
+  exportProviderProfile,
+  importProviderProfile,
   initConfig,
   loadConfig,
   providerTemplate,
+  ProviderProfileSchema,
   ProviderTemplateTypeSchema,
   resolveConfigPath,
   saveConfig,
@@ -26,6 +29,7 @@ async function callLocal(path: string, init?: RequestInit): Promise<any> {
     ...init,
     headers: {
       'content-type': 'application/json',
+      ...(process.env.MODELMULE_API_KEY ? { 'x-modelmule-api-key': process.env.MODELMULE_API_KEY } : {}),
       ...(init?.headers ?? {})
     }
   });
@@ -62,7 +66,7 @@ function addProviderTemplate(rawType: string): void {
 }
 
 const program = new Command();
-program.name('modelmule').description('Local AI router for coding tools').version('0.3.0');
+program.name('modelmule').description('Local AI router for coding tools').version('0.4.0');
 
 program
   .command('init')
@@ -138,6 +142,42 @@ modelsCmd
   .action(async () => {
     const models = await callLocal('/models');
     printJson(models);
+  });
+
+const profilesCmd = program.command('profiles').description('Provider profile import/export');
+profilesCmd
+  .command('export')
+  .description('Export provider profile JSON')
+  .argument('[file]', 'Output file, defaults to stdout')
+  .option('--providers <ids>', 'Comma-separated provider ids to export')
+  .option('--name <name>', 'Profile name', 'modelmule-provider-profile')
+  .action((file: string | undefined, options: { providers?: string; name: string }) => {
+    const config = loadConfig();
+    const providerIds = options.providers
+      ?.split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const profile = exportProviderProfile(config, providerIds, options.name);
+    const content = `${JSON.stringify(profile, null, 2)}\n`;
+    if (file) {
+      writeFileSync(file, content, 'utf8');
+      console.log(`Provider profile exported: ${file}`);
+      return;
+    }
+    console.log(content.trimEnd());
+  });
+
+profilesCmd
+  .command('import')
+  .description('Import provider profile JSON')
+  .argument('<file>', 'Profile JSON file')
+  .option('--replace', 'Replace existing providers instead of merging')
+  .action((file: string, options: { replace?: boolean }) => {
+    const raw = readFileSync(file, 'utf8');
+    const profile = ProviderProfileSchema.parse(JSON.parse(raw));
+    const nextConfig = importProviderProfile(loadConfig(), profile, { replace: Boolean(options.replace) });
+    const path = saveConfig(nextConfig, undefined, { backup: true });
+    console.log(`Provider profile imported into ${path}`);
   });
 
 program

@@ -64,9 +64,20 @@ export const RoutingConfigSchema = z.object({
   tasks: z.record(z.string(), RoutingTaskConfigSchema).default({})
 });
 
+export const CURRENT_CONFIG_SCHEMA_VERSION = 1;
+
 export const ModelMuleConfigSchema = z.object({
+  schemaVersion: z.number().int().positive().default(CURRENT_CONFIG_SCHEMA_VERSION),
   providers: z.record(z.string(), ProviderConfigSchema),
   routing: RoutingConfigSchema.default({ defaultMode: 'balanced', privacyMode: false, tasks: {} })
+});
+
+export const ProviderProfileSchema = z.object({
+  schemaVersion: z.number().int().positive().default(1),
+  name: z.string().min(1).default('modelmule-provider-profile'),
+  createdAt: z.string().default(() => new Date().toISOString()),
+  providers: z.record(z.string(), ProviderConfigSchema),
+  routing: RoutingConfigSchema.optional()
 });
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
@@ -74,9 +85,16 @@ export type ProviderType = z.infer<typeof ProviderTypeSchema>;
 export type ProviderTemplateType = z.infer<typeof ProviderTemplateTypeSchema>;
 export type RoutingConfig = z.infer<typeof RoutingConfigSchema>;
 export type ModelMuleConfig = z.infer<typeof ModelMuleConfigSchema>;
+export type ProviderProfile = z.infer<typeof ProviderProfileSchema>;
 
 export const DEFAULT_CONFIG_PATH = join(homedir(), '.modelmule', 'config.yaml');
 export const DEFAULT_DB_PATH = join(homedir(), '.modelmule', 'modelmule.db');
+
+export interface ConfigMigrationStatus {
+  currentVersion: number;
+  latestVersion: number;
+  needsMigration: boolean;
+}
 
 export interface ConfigBackup {
   name: string;
@@ -151,6 +169,7 @@ export function providerTemplate(type: ProviderTemplateType): ProviderConfig {
 }
 
 export const defaultConfig = (): ModelMuleConfig => ({
+  schemaVersion: CURRENT_CONFIG_SCHEMA_VERSION,
   providers: {
     openrouter_main: {
       type: 'openrouter',
@@ -178,6 +197,49 @@ export const defaultConfig = (): ModelMuleConfig => ({
     }
   }
 });
+
+export function configMigrationStatus(config: ModelMuleConfig): ConfigMigrationStatus {
+  return {
+    currentVersion: config.schemaVersion,
+    latestVersion: CURRENT_CONFIG_SCHEMA_VERSION,
+    needsMigration: config.schemaVersion < CURRENT_CONFIG_SCHEMA_VERSION
+  };
+}
+
+export function exportProviderProfile(config: ModelMuleConfig, providerIds?: string[], name = 'modelmule-provider-profile'): ProviderProfile {
+  const selected = providerIds && providerIds.length > 0 ? providerIds : Object.keys(config.providers);
+  const providers = Object.fromEntries(
+    selected
+      .filter((providerId) => config.providers[providerId])
+      .map((providerId) => [providerId, config.providers[providerId]])
+  );
+
+  return ProviderProfileSchema.parse({
+    schemaVersion: 1,
+    name,
+    createdAt: new Date().toISOString(),
+    providers,
+    routing: config.routing
+  });
+}
+
+export function importProviderProfile(
+  config: ModelMuleConfig,
+  profile: ProviderProfile,
+  options: { replace?: boolean } = {}
+): ModelMuleConfig {
+  const parsedProfile = ProviderProfileSchema.parse(profile);
+  return ModelMuleConfigSchema.parse({
+    ...config,
+    providers: options.replace
+      ? parsedProfile.providers
+      : {
+          ...config.providers,
+          ...parsedProfile.providers
+        },
+    routing: parsedProfile.routing ?? config.routing
+  });
+}
 
 export function resolveConfigPath(configPath?: string): string {
   return configPath ?? process.env.MODELMULE_CONFIG_PATH ?? DEFAULT_CONFIG_PATH;

@@ -3,10 +3,14 @@ import rateLimit from '@fastify/rate-limit';
 import { z, ZodError } from 'zod';
 import {
   createConfigBackup,
+  configMigrationStatus,
+  exportProviderProfile,
+  importProviderProfile,
   listConfigBackups,
   loadConfig,
   ModelMuleConfigSchema,
   ProviderConfigSchema,
+  ProviderProfileSchema,
   ProviderTemplateTypeSchema,
   ProviderTypeSchema,
   providerTemplate,
@@ -64,6 +68,7 @@ function toOpenAIResponse(input: {
 export interface BuildServerOptions {
   configPath?: string;
   dbPath?: string;
+  apiKey?: string;
 }
 
 const providerIdPattern = /^[A-Za-z0-9_-]+$/;
@@ -95,6 +100,15 @@ const ProviderUpsertRequestSchema = z
 const RestoreConfigRequestSchema = z.object({
   name: z.string().min(1)
 });
+const ProfileImportRequestSchema = z.object({
+  profile: ProviderProfileSchema,
+  replace: z.boolean().default(false)
+});
+
+function getBearerToken(header: string | undefined): string | undefined {
+  const [scheme, token] = header?.split(/\s+/, 2) ?? [];
+  return scheme?.toLowerCase() === 'bearer' ? token : undefined;
+}
 
 function createService(config: ModelMuleConfig, store: UsageStore): ModelMuleService {
   const providers = Object.fromEntries(
@@ -125,6 +139,7 @@ function errorResponse(error: unknown, type = 'validation_error') {
 
 export async function buildServer(options: BuildServerOptions = {}): Promise<{ app: FastifyInstance; service: ModelMuleService }> {
   const configPath = resolveConfigPath(options.configPath);
+  const apiKey = options.apiKey ?? process.env.MODELMULE_API_KEY;
   let config = loadConfig(options.configPath);
   const store = new UsageStore(options.dbPath);
   let service = createService(config, store);
@@ -161,6 +176,33 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
     keyGenerator: (request) => request.ip
   });
 
+  app.addHook('preHandler', async (request, reply) => {
+    if (!apiKey) {
+      return;
+    }
+
+    const url = request.url.split('?')[0] ?? '/';
+    const publicPath = url === '/' || url === '/ui' || url.startsWith('/ui/') || url === '/health' || url === '/auth/status';
+    if (publicPath) {
+      return;
+    }
+
+    const providedKey = request.headers['x-modelmule-api-key'];
+    const token = getBearerToken(request.headers.authorization);
+    const candidate = Array.isArray(providedKey) ? providedKey[0] : providedKey;
+    if (candidate === apiKey || token === apiKey) {
+      return;
+    }
+
+    reply.code(401);
+    return {
+      error: {
+        message: 'Authentication required',
+        type: 'unauthorized'
+      }
+    };
+  });
+
   app.get('/', async (_request, reply) => {
     reply.type('text/html; charset=utf-8');
     return dashboardHtml;
@@ -182,6 +224,18 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
   });
 
   app.get('/health', async () => ({ status: 'ok' }));
+  app.get('/auth/status', async () => ({ required: Boolean(apiKey) }));
+  app.get('/system/status', routeRateLimit, async () => ({
+    version: process.env.npm_package_version ?? '0.0.0',
+    auth: { required: Boolean(apiKey) },
+    config: {
+      path: configPath,
+      migrations: configMigrationStatus(config)
+    },
+    storage: {
+      migrations: store.migrationStatus()
+    }
+  }));
   app.get('/capabilities', routeRateLimit, async () => ({
     providerTypes: ProviderTypeSchema.options,
     providerTemplates: ProviderTemplateTypeSchema.options,
@@ -193,6 +247,27 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
   app.get('/models', routeRateLimit, async () => ({ models: await service.listModels() }));
   app.get('/usage', routeRateLimit, async () => service.getUsage());
   app.get('/config', routeRateLimit, async () => ({ path: configPath, config }));
+  app.get('/profiles/export', routeRateLimit, async (request) => {
+    const query = request.query as { providers?: string; name?: string };
+    const providerIds = query.providers
+      ?.split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+    return { profile: exportProviderProfile(config, providerIds, query.name) };
+  });
+  app.post('/profiles/import', routeRateLimit, async (request, reply) => {
+    try {
+      const rawBody = request.body as Record<string, unknown>;
+      const body =
+        rawBody && typeof rawBody === 'object' && 'profile' in rawBody
+          ? ProfileImportRequestSchema.parse(rawBody)
+          : { profile: ProviderProfileSchema.parse(rawBody), replace: false };
+      return { path: configPath, config: applyConfig(importProviderProfile(config, body.profile, { replace: body.replace })) };
+    } catch (error) {
+      reply.code(400);
+      return errorResponse(error);
+    }
+  });
   app.get('/config/backups', routeRateLimit, async () => ({ backups: listConfigBackups(options.configPath) }));
   app.post('/config/backup', routeRateLimit, async () => ({ backup: createConfigBackup(options.configPath) }));
   app.post('/config/restore', routeRateLimit, async (request, reply) => {

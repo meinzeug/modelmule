@@ -34,6 +34,15 @@ export class ModelMuleService {
       priority: number;
       dailyBudgetUsd?: number;
       dailyRequestLimit?: number;
+      capabilities: {
+        score: number;
+        execution: string;
+        supportsStaticModels: boolean;
+        supportsLocalExecution: boolean;
+        supportsBudgetLimit: boolean;
+        supportsRequestLimit: boolean;
+        recommendedFor: string[];
+      };
       message?: string;
     }>
   > {
@@ -44,6 +53,16 @@ export class ModelMuleService {
           healthy: false,
           message: error instanceof Error ? error.message : String(error)
         }));
+        const configured = this.options.config.providers[id];
+        const isShellCommand = provider.type === 'shell_command';
+        const isCloud = !provider.isLocal;
+        const hasStaticModels = Boolean(configured?.models?.length);
+        const score =
+          provider.priority +
+          (health.healthy ? 20 : -40) +
+          (provider.isLocal ? 10 : 0) +
+          (hasStaticModels ? 5 : 0) -
+          (provider.dailyBudgetUsd !== undefined ? Math.min(provider.dailyBudgetUsd, 10) : 0);
         return {
           id,
           type: provider.type,
@@ -52,6 +71,19 @@ export class ModelMuleService {
           priority: provider.priority,
           dailyBudgetUsd: provider.dailyBudgetUsd,
           dailyRequestLimit: provider.dailyRequestLimit,
+          capabilities: {
+            score: Math.round(score),
+            execution: isShellCommand ? 'local-cli' : provider.isLocal ? 'local-http' : 'cloud-api',
+            supportsStaticModels: hasStaticModels,
+            supportsLocalExecution: provider.isLocal,
+            supportsBudgetLimit: provider.dailyBudgetUsd !== undefined,
+            supportsRequestLimit: provider.dailyRequestLimit !== undefined,
+            recommendedFor: [
+              ...(provider.isLocal ? ['local-private'] : ['coding', 'premium-reasoning']),
+              ...(isCloud ? ['long-context'] : []),
+              ...(isShellCommand ? ['coding', 'debugging'] : [])
+            ]
+          },
           message: health.message
         };
       })

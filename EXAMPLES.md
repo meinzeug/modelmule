@@ -97,6 +97,12 @@ List server capabilities:
 curl http://127.0.0.1:43110/capabilities
 ```
 
+System status:
+
+```bash
+curl http://127.0.0.1:43110/system/status
+```
+
 List providers:
 
 ```bash
@@ -119,6 +125,20 @@ List config backups:
 
 ```bash
 curl http://127.0.0.1:43110/config/backups
+```
+
+Export provider profile:
+
+```bash
+curl 'http://127.0.0.1:43110/profiles/export?providers=codex_local&name=local-cli-profile'
+```
+
+Import provider profile:
+
+```bash
+curl -s http://127.0.0.1:43110/profiles/import \
+  -H 'content-type: application/json' \
+  -d @providers.json
 ```
 
 Preview routing:

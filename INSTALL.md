@@ -73,6 +73,8 @@ pnpm test
 pnpm lint
 pnpm dev:server
 pnpm dev:cli
+pnpm release:check
+pnpm package:linux
 ```
 
 ## Provider Setup
@@ -89,6 +91,36 @@ export ANTHROPIC_API_KEY=...
 Local providers such as Ollama must be running separately before ModelMule can call them.
 
 CLI providers such as Codex CLI or Claude CLI must be installed and authenticated separately before ModelMule can call them through stdin/stdout.
+
+## Optional Local API Auth
+
+Set `MODELMULE_API_KEY` before starting the server:
+
+```bash
+export MODELMULE_API_KEY=change-me
+pnpm --filter @modelmule/cli dev serve
+```
+
+Clients can authenticate with either:
+
+```text
+x-modelmule-api-key: change-me
+Authorization: Bearer change-me
+```
+
+## Linux Tarball
+
+Create a local Linux tarball:
+
+```bash
+pnpm package:linux
+```
+
+Output:
+
+```text
+dist-linux/modelmule-<version>-linux.tar.gz
+```
 
 ## Troubleshooting
 
@@ -115,3 +147,5 @@ modelmule route test coding
 ```
 
 If a config change breaks startup or routing, inspect the local backup directory next to `config.yaml` or use the web console backup list after the server starts with a valid config.
+
+If API calls return `401`, confirm `MODELMULE_API_KEY` and send the same value as `x-modelmule-api-key`.

@@ -3,6 +3,8 @@ import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 import { DEFAULT_DB_PATH } from '@modelmule/config';
 
+export const CURRENT_STORAGE_SCHEMA_VERSION = 1;
+
 export interface RequestLog {
   providerId: string;
   model: string;
@@ -30,6 +32,11 @@ export class UsageStore {
 
   private init(): void {
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS providers (
         id TEXT PRIMARY KEY,
         type TEXT NOT NULL,
@@ -78,6 +85,37 @@ export class UsageStore {
         created_at TEXT NOT NULL
       );
     `);
+    this.recordMigration(CURRENT_STORAGE_SCHEMA_VERSION, 'initial_schema');
+    this.db.pragma(`user_version = ${CURRENT_STORAGE_SCHEMA_VERSION}`);
+  }
+
+  private recordMigration(version: number, name: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO schema_migrations (version, name, applied_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(version) DO NOTHING`
+      )
+      .run(version, name, new Date().toISOString());
+  }
+
+  migrationStatus(): {
+    currentVersion: number;
+    latestVersion: number;
+    needsMigration: boolean;
+    applied: Array<{ version: number; name: string; appliedAt: string }>;
+  } {
+    const current = this.db.pragma('user_version', { simple: true }) as number;
+    const applied = this.db
+      .prepare('SELECT version, name, applied_at as appliedAt FROM schema_migrations ORDER BY version ASC')
+      .all() as Array<{ version: number; name: string; appliedAt: string }>;
+
+    return {
+      currentVersion: current,
+      latestVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+      needsMigration: current < CURRENT_STORAGE_SCHEMA_VERSION,
+      applied
+    };
   }
 
   upsertProvider(providerId: string, type: string): void {

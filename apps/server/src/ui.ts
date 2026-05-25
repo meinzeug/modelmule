@@ -31,6 +31,10 @@ export const dashboardHtml = `<!doctype html>
             <p class="eyebrow">Local endpoint</p>
             <p class="endpoint">http://127.0.0.1:43110/v1</p>
           </div>
+          <label class="token-field">
+            API token
+            <input id="api-token" type="password" placeholder="Only required when MODELMULE_API_KEY is set" autocomplete="off" />
+          </label>
           <div class="actions">
             <button id="refresh-btn" type="button">Refresh</button>
             <button id="reload-btn" type="button">Reload config</button>
@@ -301,6 +305,14 @@ pre {
   align-items: center;
 }
 
+.token-field {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 13px;
+  min-width: min(320px, 100%);
+}
+
 .provider-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -515,10 +527,12 @@ function showToast(message) {
 }
 
 async function api(path, options) {
+  const token = localStorage.getItem('modelmule.apiKey') || '';
   const response = await fetch(path, {
     ...options,
     headers: {
       'content-type': 'application/json',
+      ...(token ? { 'x-modelmule-api-key': token } : {}),
       ...(options && options.headers ? options.headers : {})
     }
   });
@@ -656,6 +670,9 @@ function setServerStatus(ok) {
 
 async function loadAll() {
   try {
+    const authStatus = await fetch('/auth/status').then((response) => response.json()).catch(() => ({ required: false }));
+    const tokenInput = $('#api-token');
+    tokenInput.placeholder = authStatus.required ? 'Required for API operations' : 'Optional';
     await api('/health');
     setServerStatus(true);
     const [capabilitiesPayload, configPayload, providersPayload, usagePayload, backupPayload] = await Promise.all([
@@ -715,6 +732,21 @@ $('#reload-btn').addEventListener('click', async () => {
   showToast('Config reloaded');
   await loadAll();
 });
+
+$('#api-token').addEventListener('change', (event) => {
+  const value = event.currentTarget.value.trim();
+  if (value) {
+    localStorage.setItem('modelmule.apiKey', value);
+  } else {
+    localStorage.removeItem('modelmule.apiKey');
+  }
+  loadAll();
+});
+
+const storedToken = localStorage.getItem('modelmule.apiKey');
+if (storedToken) {
+  $('#api-token').value = storedToken;
+}
 
 $('#backup-btn').addEventListener('click', async () => {
   await api('/config/backup', { method: 'POST', body: '{}' });

@@ -77,6 +77,8 @@ Most local clients still require an API key field. For ModelMule itself, any pla
 Available endpoints:
 
 - `GET /health`
+- `GET /auth/status`
+- `GET /system/status`
 - `GET /capabilities`
 - `GET /providers`
 - `GET /models`
@@ -93,6 +95,8 @@ Available endpoints:
 - `POST /route/test`
 - `POST /v1/chat/completions`
 - `POST /v1/code`
+
+Optional local API authentication can be enabled with `MODELMULE_API_KEY`. When enabled, API requests must send either `x-modelmule-api-key` or `Authorization: Bearer <token>`.
 
 Example request:
 
@@ -132,6 +136,8 @@ modelmule providers test
 modelmule models list
 modelmule usage
 modelmule config edit
+modelmule profiles export providers.json
+modelmule profiles import providers.json
 modelmule route test coding
 ```
 
@@ -195,6 +201,18 @@ Test:
 pnpm test
 ```
 
+Release check:
+
+```bash
+pnpm release:check
+```
+
+Linux package:
+
+```bash
+pnpm package:linux
+```
+
 More setup details are available in [INSTALL.md](./INSTALL.md).
 
 ## Compatibility Notes
@@ -204,16 +222,18 @@ More setup details are available in [INSTALL.md](./INSTALL.md).
 - Local database: SQLite through `better-sqlite3`
 - Primary API shape: OpenAI-compatible chat completions
 - Configuration format: YAML
+- Optional local API auth: `MODELMULE_API_KEY`
+- Linux package output: `dist-linux/modelmule-<version>-linux.tar.gz`
 
-## Roadmap
+## Operational Baseline
 
-Near-term areas for improvement:
+Implemented foundations:
 
-- migration handling for configuration and storage changes
+- config and storage migration status
 - documented release process
-- optional authentication for local deployments that need it
-- provider-specific capability scoring
-- packaged Linux desktop distribution
-- import/export workflows for shared provider profiles
+- optional authentication for local deployments
+- provider profile import/export
+- Linux tarball packaging foundation
+- provider capability scoring in diagnostics
 
-The roadmap is intentionally operational: changes should improve reliability, transparency, and maintainability without weakening provider terms or local policy boundaries.
+Future work should preserve the same constraints: improve reliability, transparency, and maintainability without weakening provider terms or local policy boundaries.
