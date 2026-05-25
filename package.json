@@ -1,7 +1,7 @@
 {
   "name": "modelmule",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "description": "Local AI routing layer for coding tools",
   "packageManager": "pnpm@10.22.0",
@@ -11,6 +11,7 @@
   "scripts": {
     "build": "tsc -b",
     "clean": "git clean -fdX",
+    "dev": "pnpm --filter @modelmule/cli dev",
     "lint": "tsc -b --pretty false",
     "package:linux": "node scripts/package-linux.mjs",
     "release:check": "pnpm build && pnpm test && git diff --check",

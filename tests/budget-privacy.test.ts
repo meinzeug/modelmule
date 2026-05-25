@@ -47,8 +47,8 @@ describe('budget and privacy mode', () => {
   it('skips provider when budget is exhausted', async () => {
     const config = defaultConfig();
     config.providers = {
-      expensive: { type: 'openrouter', priority: 90, dailyBudgetUsd: 0, models: ['m'], apiKeyEnv: 'OPENROUTER_API_KEY' },
-      local: { type: 'ollama', priority: 50, models: ['m'], isLocal: true }
+      expensive: { type: 'openrouter', enabled: true, priority: 90, dailyBudgetUsd: 0, models: ['m'], apiKeyEnv: 'OPENROUTER_API_KEY' },
+      local: { type: 'ollama', enabled: true, priority: 50, models: ['m'], isLocal: true }
     };
     config.routing.tasks.coding = { prefer: ['expensive', 'local'] };
 

@@ -9,11 +9,12 @@ export interface RankedProvider {
 export class RoutingEngine {
   constructor(private readonly config: ModelMuleConfig) {}
 
-  decide(taskType: TaskType, providers: Record<string, ProviderRuntime>): RouteDecision {
-    const mode = this.resolveMode(taskType);
+  decide(taskType: TaskType, providers: Record<string, ProviderRuntime>, routingProfileId?: string): RouteDecision {
+    const profile = routingProfileId ? this.config.routingProfiles?.[routingProfileId] : undefined;
+    const mode = profile?.mode ?? this.resolveMode(taskType);
     const taskPreferences = this.config.routing.tasks as Record<string, { prefer?: string[] }>;
-    const preferred = taskPreferences[taskType]?.prefer ?? [];
-    const providerIds = Object.keys(providers);
+    const preferred = profile?.providerOrder?.length ? profile.providerOrder : taskPreferences[taskType]?.prefer ?? [];
+    const providerIds = Object.keys(providers).filter((providerId) => this.config.providers[providerId]?.enabled !== false);
 
     const ranked: RankedProvider[] = providerIds.map((providerId) => {
       const provider = providers[providerId];
@@ -23,12 +24,16 @@ export class RoutingEngine {
         score += 100 - preferred.indexOf(providerId) * 10;
       }
 
-      if (this.config.routing.privacyMode && !provider.isLocal) {
+      if ((this.config.routing.privacyMode || profile?.localOnly) && !provider.isLocal) {
         score -= 1000;
       }
 
-      if (mode === 'local-only' && !provider.isLocal) {
+      if ((mode === 'local-only' || profile?.localOnly) && !provider.isLocal) {
         score -= 2000;
+      }
+
+      if (profile?.allowPaid === false && !this.providerHasFreeModel(providerId, provider.isLocal)) {
+        score -= 1500;
       }
 
       if (taskType === 'local-private' && provider.isLocal) {
@@ -55,8 +60,18 @@ export class RoutingEngine {
     return {
       orderedProviders: ranked.map((item) => item.providerId),
       mode,
-      taskType
+      taskType,
+      routingProfileId
     };
+  }
+
+  private providerHasFreeModel(providerId: string, isLocal: boolean): boolean {
+    if (isLocal) {
+      return true;
+    }
+    return Object.values(this.config.models ?? {}).some((entry) => {
+      return entry.providerId === providerId && entry.enabled !== false && entry.tags.includes('free');
+    });
   }
 
   private resolveMode(taskType: TaskType): string {

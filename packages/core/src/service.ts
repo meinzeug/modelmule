@@ -13,14 +13,20 @@ export interface RoutedChatResult {
   response: ChatResponse;
   usedProvider: string;
   fallbackChain: string[];
+  routingProfileId?: string;
+  codingTool?: string;
 }
 
 export class ModelMuleService {
   private readonly routing: RoutingEngine;
 
   constructor(private readonly options: ServiceOptions) {
+    const enabledProviders = Object.fromEntries(
+      Object.entries(options.providers).filter(([providerId]) => options.config.providers[providerId]?.enabled !== false)
+    );
+    this.options = { ...options, providers: enabledProviders };
     this.routing = new RoutingEngine(options.config);
-    for (const [providerId, provider] of Object.entries(options.providers)) {
+    for (const [providerId, provider] of Object.entries(this.options.providers)) {
       this.options.store.upsertProvider(providerId, provider.type);
     }
   }
@@ -107,9 +113,11 @@ export class ModelMuleService {
     return this.options.store.usageSummary();
   }
 
-  inspectRoute(request: Pick<ChatRequest, 'taskType'>): RoutePreview {
+  inspectRoute(request: Pick<ChatRequest, 'taskType' | 'metadata'>): RoutePreview {
     const taskType = this.normalizeTaskType(request.taskType);
-    const decision = this.routing.decide(taskType, this.options.providers);
+    const codingTool = this.resolveCodingTool(request.metadata);
+    const routingProfileId = this.resolveRoutingProfileId(codingTool);
+    const decision = this.routing.decide(taskType, this.options.providers, routingProfileId);
     const providers: RoutePreviewProvider[] = [];
     let selectedProvider: string | undefined;
 
@@ -173,7 +181,8 @@ export class ModelMuleService {
   }
 
   async chat(request: ChatRequest): Promise<RoutedChatResult> {
-    const preview = this.inspectRoute({ taskType: request.taskType });
+    const codingTool = this.resolveCodingTool(request.metadata);
+    const preview = this.inspectRoute({ taskType: request.taskType, metadata: request.metadata });
     const taskType = preview.taskType;
     const fallbackChain: string[] = [];
     let firstProvider: string | undefined;
@@ -211,7 +220,7 @@ export class ModelMuleService {
         } else {
           this.options.store.logRoutingEvent(taskType, providerId, undefined, 'primary-success');
         }
-        return { response, usedProvider: providerId, fallbackChain };
+        return { response, usedProvider: providerId, fallbackChain, routingProfileId: preview.routingProfileId, codingTool };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         fallbackChain.push(providerId);
@@ -251,5 +260,21 @@ export class ModelMuleService {
       return taskType as TaskType;
     }
     return 'coding';
+  }
+
+  private resolveCodingTool(metadata: Record<string, unknown> | undefined): string | undefined {
+    const candidate = metadata?.codingTool ?? metadata?.tool ?? metadata?.client;
+    return typeof candidate === 'string' && candidate.trim().length > 0 ? candidate.trim() : undefined;
+  }
+
+  private resolveRoutingProfileId(codingTool: string | undefined): string | undefined {
+    if (!codingTool) {
+      return undefined;
+    }
+    const assignment = this.options.config.codingAiTools?.[codingTool];
+    if (!assignment || assignment.enabled === false) {
+      return undefined;
+    }
+    return assignment.routingProfileId;
   }
 }

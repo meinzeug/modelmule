@@ -34,8 +34,8 @@ describe('routing engine', () => {
   it('reports preview availability and selected provider', () => {
     const config = defaultConfig();
     config.providers = {
-      cloud: { type: 'openrouter', priority: 90, dailyBudgetUsd: 0, models: ['cloud-model'], apiKeyEnv: 'OPENROUTER_API_KEY' },
-      local: { type: 'ollama', priority: 50, models: ['local-model'], isLocal: true }
+      cloud: { type: 'openrouter', enabled: true, priority: 90, dailyBudgetUsd: 0, models: ['cloud-model'], apiKeyEnv: 'OPENROUTER_API_KEY' },
+      local: { type: 'ollama', enabled: true, priority: 50, models: ['local-model'], isLocal: true }
     };
     config.routing.tasks.coding = { prefer: ['cloud', 'local'] };
 

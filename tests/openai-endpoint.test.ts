@@ -15,6 +15,7 @@ const testConfig: ModelMuleConfig = {
   providers: {
     shell_local: {
       type: 'shell_command',
+      enabled: true,
       command: '/bin/cat',
       priority: 90,
       models: ['shell-model'],
@@ -27,7 +28,10 @@ const testConfig: ModelMuleConfig = {
     tasks: {
       coding: { prefer: ['shell_local'] }
     }
-  }
+  },
+  models: {},
+  routingProfiles: {},
+  codingAiTools: {}
 };
 
 saveConfig(testConfig, configPath);
@@ -49,8 +53,11 @@ describe('openai compatible endpoint', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.headers['content-type']).toContain('text/html');
-    expect(response.body).toContain('Provider Console');
-    expect(response.body).toContain('Connection Manager');
+    expect(response.body).toContain('Einfaches Setup');
+    expect(response.body).toContain('Setup-Assistent');
+    expect(response.body).toContain('Modelle verwalten');
+    expect(response.body).toContain('Routing-Profile');
+    expect(response.body).toContain('Coding AIs installieren und verbinden');
   });
 
   it('returns OpenAI style response with modelmule metadata', async () => {
@@ -68,6 +75,91 @@ describe('openai compatible endpoint', () => {
     expect(body.object).toBe('chat.completion');
     expect(body.choices[0].message.content).toContain('user: hello modelmule');
     expect(body.metadata.modelmule.usedProvider).toBe('shell_local');
+  });
+
+  it('returns model catalog entries with free/local tags', async () => {
+    const response = await setup.app.inject({
+      method: 'GET',
+      url: '/models/catalog'
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.models[0]).toMatchObject({
+      providerId: 'shell_local',
+      model: 'shell-model',
+      enabled: true
+    });
+  });
+
+  it('updates model catalog entries', async () => {
+    const response = await setup.app.inject({
+      method: 'POST',
+      url: '/models/catalog/update',
+      payload: {
+        id: 'shell_local:shell-model',
+        enabled: false
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.config.models['shell_local:shell-model']).toMatchObject({
+      providerId: 'shell_local',
+      model: 'shell-model',
+      enabled: false
+    });
+  });
+
+  it('routes by coding AI routing profile metadata', async () => {
+    const response = await setup.app.inject({
+      method: 'POST',
+      url: '/tools/coding-ai/assign',
+      payload: {
+        toolId: 'codex',
+        assignment: {
+          enabled: true,
+          routingProfileId: 'test_profile'
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+
+    const profileResponse = await setup.app.inject({
+      method: 'POST',
+      url: '/routing/profile',
+      payload: {
+        id: 'test_profile',
+        profile: {
+          name: 'Test Profile',
+          mode: 'balanced',
+          providerOrder: ['shell_local'],
+          modelPreferences: {},
+          allowPaid: false,
+          localOnly: true
+        }
+      }
+    });
+
+    expect(profileResponse.statusCode).toBe(200);
+
+    const chatResponse = await setup.app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: {
+        'x-modelmule-tool': 'codex'
+      },
+      payload: {
+        messages: [{ role: 'user', content: 'hello through profile' }],
+        taskType: 'coding'
+      }
+    });
+
+    expect(chatResponse.statusCode).toBe(200);
+    const body = chatResponse.json();
+    expect(body.metadata.modelmule.routingProfileId).toBe('test_profile');
+    expect(body.metadata.modelmule.codingTool).toBe('codex');
   });
 
   it('returns provider capability metadata', async () => {
@@ -215,6 +307,28 @@ describe('openai compatible endpoint', () => {
     expect(importResponse.statusCode).toBe(200);
     const imported = importResponse.json();
     expect(imported.config.providers.imported_shell.type).toBe('shell_command');
+  });
+
+  it('applies setup quickstart without returning raw secrets', async () => {
+    const response = await setup.app.inject({
+      method: 'POST',
+      url: '/setup/quickstart',
+      payload: {
+        presetId: 'openrouter',
+        providerId: 'quick_openrouter',
+        apiKey: 'test-openrouter-key',
+        routingProfileId: 'free_first',
+        codingToolId: 'codex'
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.providerId).toBe('quick_openrouter');
+    expect(body.config.providers.quick_openrouter.apiKeyEnv).toBe('OPENROUTER_API_KEY');
+    expect(JSON.stringify(body)).not.toContain('test-openrouter-key');
+    expect(body.config.codingAiTools.codex.routingProfileId).toBe('free_first');
+    expect(body.status.steps.some((step: { id: string; done: boolean }) => step.id === 'provider' && step.done)).toBe(true);
   });
 
   it('enforces optional API authentication when configured', async () => {

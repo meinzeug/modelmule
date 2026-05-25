@@ -85,6 +85,8 @@ Local web console:
 http://127.0.0.1:43110/
 ```
 
+The console includes provider/account management, a routed chat test console, routing policy editing, usage diagnostics, config backups, and provider profile import/export.
+
 Health check:
 
 ```bash

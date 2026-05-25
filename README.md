@@ -30,6 +30,8 @@ ModelMule should only be used with services, credentials, models, and local comm
 - Local Fastify server on `http://127.0.0.1:43110`
 - Local web console at `http://127.0.0.1:43110/`
 - Connection manager for OpenAI-compatible APIs, OpenRouter, Anthropic, Ollama, Codex CLI, Claude CLI, and custom shell commands
+- Chat console for testing routed prompts directly from the browser
+- Routing policy editor and provider profile import/export in the web UI
 - OpenAI-compatible `POST /v1/chat/completions`
 - Simple coding helper endpoint at `POST /v1/code`
 - Provider support for OpenRouter, Ollama, OpenAI-compatible APIs, Anthropic, local shell commands, and CLI tools exposed through stdin/stdout

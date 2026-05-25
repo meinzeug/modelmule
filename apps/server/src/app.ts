@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance } from 'fastify';
+import { spawnSync } from 'node:child_process';
 import rateLimit from '@fastify/rate-limit';
 import { z, ZodError } from 'zod';
 import {
@@ -8,6 +9,7 @@ import {
   importProviderProfile,
   listConfigBackups,
   loadConfig,
+  ModelCatalogEntrySchema,
   ModelMuleConfigSchema,
   ProviderConfigSchema,
   ProviderProfileSchema,
@@ -18,6 +20,8 @@ import {
   restoreConfigBackup,
   RoutingModeSchema,
   RoutingConfigSchema,
+  RoutingProfileSchema,
+  CodingAiToolConfigSchema,
   saveConfig,
   TaskTypeSchema,
   type ModelMuleConfig
@@ -34,6 +38,8 @@ function toOpenAIResponse(input: {
   completionTokens: number;
   usedProvider: string;
   fallbackChain: string[];
+  routingProfileId?: string;
+  codingTool?: string;
 }) {
   const created = Math.floor(Date.now() / 1000);
   return {
@@ -59,7 +65,9 @@ function toOpenAIResponse(input: {
     metadata: {
       modelmule: {
         usedProvider: input.usedProvider,
-        fallbackChain: input.fallbackChain
+          fallbackChain: input.fallbackChain,
+          routingProfileId: input.routingProfileId,
+          codingTool: input.codingTool
       }
     }
   };
@@ -104,6 +112,267 @@ const ProfileImportRequestSchema = z.object({
   profile: ProviderProfileSchema,
   replace: z.boolean().default(false)
 });
+const ProviderSecretRequestSchema = z.object({
+  id: ProviderIdSchema,
+  apiKey: z.string().min(1)
+});
+const RoutingProfileUpsertRequestSchema = z.object({
+  id: z.string().trim().regex(providerIdPattern, 'Routing profile id must contain only letters, numbers, underscores, and dashes'),
+  profile: RoutingProfileSchema
+});
+const CodingAiAssignmentRequestSchema = z.object({
+  toolId: z.string().min(1),
+  assignment: CodingAiToolConfigSchema
+});
+const CodingAiInstallRequestSchema = z.object({
+  toolId: z.string().min(1),
+  method: z.string().min(1).optional()
+});
+const CodingAiConnectRequestSchema = z.object({
+  toolId: z.string().min(1),
+  providerId: ProviderIdSchema.optional()
+});
+const ModelCatalogUpdateRequestSchema = z.object({
+  id: z.string().min(1),
+  enabled: z.boolean()
+});
+const SetupQuickstartRequestSchema = z.object({
+  presetId: z.string().min(1),
+  providerId: ProviderIdSchema.optional(),
+  apiKey: z.string().optional(),
+  routingProfileId: z.string().min(1).optional(),
+  codingToolId: z.string().min(1).optional()
+});
+
+interface CodingAiDefinition {
+  id: string;
+  name: string;
+  description: string;
+  command: string;
+  installMethods: Record<string, string[]>;
+  defaultProviderId: string;
+  defaultArgs: string[];
+  defaultModel: string;
+}
+
+interface ProviderPreset {
+  id: string;
+  name: string;
+  type: string;
+  baseUrl?: string;
+  apiKeyEnv?: string;
+  model?: string;
+  isLocal?: boolean;
+  note?: string;
+}
+
+const CODING_AI_DEFINITIONS: CodingAiDefinition[] = [
+  {
+    id: 'codex',
+    name: 'Codex CLI',
+    description: 'OpenAI Codex als lokales CLI-Tool.',
+    command: 'codex',
+    installMethods: {
+      npm: ['npm', 'install', '-g', '@openai/codex'],
+      pnpm: ['pnpm', 'add', '-g', '@openai/codex']
+    },
+    defaultProviderId: 'codex_cli',
+    defaultArgs: ['exec', '-'],
+    defaultModel: 'codex-cli'
+  },
+  {
+    id: 'claude_code',
+    name: 'Claude Code',
+    description: 'Anthropic Claude Code als CLI-Tool.',
+    command: 'claude',
+    installMethods: {
+      npm: ['npm', 'install', '-g', '@anthropic-ai/claude-code'],
+      pnpm: ['pnpm', 'add', '-g', '@anthropic-ai/claude-code']
+    },
+    defaultProviderId: 'claude_cli',
+    defaultArgs: ['-p'],
+    defaultModel: 'claude-cli'
+  },
+  {
+    id: 'opencode',
+    name: 'OpenCode',
+    description: 'OpenCode CLI mit stdin/stdout Anbindung.',
+    command: 'opencode',
+    installMethods: {
+      npm: ['npm', 'install', '-g', '@opencode-ai/cli'],
+      pnpm: ['pnpm', 'add', '-g', '@opencode-ai/cli']
+    },
+    defaultProviderId: 'opencode_cli',
+    defaultArgs: ['chat', '--stdin'],
+    defaultModel: 'opencode-cli'
+  },
+  {
+    id: 'aider',
+    name: 'Aider',
+    description: 'Aider als lokales Coding-CLI.',
+    command: 'aider',
+    installMethods: {
+      pipx: ['pipx', 'install', 'aider-chat'],
+      pip: ['python3', '-m', 'pip', 'install', '--user', 'aider-chat']
+    },
+    defaultProviderId: 'aider_cli',
+    defaultArgs: ['--message-file', '-'],
+    defaultModel: 'aider-cli'
+  }
+];
+
+function commandPath(command: string): string | undefined {
+  const check = spawnSync('sh', ['-c', 'command -v "$1"', 'modelmule-command-check', command], {
+    encoding: 'utf8',
+    timeout: 5000
+  });
+  const output = check.stdout.trim();
+  return check.status === 0 && output ? output : undefined;
+}
+
+function findCodingAi(toolId: string): CodingAiDefinition | undefined {
+  return CODING_AI_DEFINITIONS.find((tool) => tool.id === toolId);
+}
+
+function commandVersion(command: string): string | undefined {
+  for (const args of [['--version'], ['version']]) {
+    const run = spawnSync(command, args, { encoding: 'utf8', timeout: 5000 });
+    const output = `${run.stdout}${run.stderr}`.trim().split('\n')[0]?.trim();
+    if (run.status === 0 && output) {
+      return output;
+    }
+  }
+  return undefined;
+}
+
+function looksLikeSecret(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  return /^(sk-|sk_|or-|eyJ|AIza|xai-|gsk_|mistral-|deepseek-)/i.test(value) || value.length > 48;
+}
+
+function maskSecret(value: string | undefined): string | undefined {
+  if (!value || !looksLikeSecret(value)) {
+    return value;
+  }
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
+
+function safeConfig(config: ModelMuleConfig): ModelMuleConfig {
+  return {
+    ...config,
+    providers: Object.fromEntries(
+      Object.entries(config.providers).map(([providerId, provider]) => [
+        providerId,
+        {
+          ...provider,
+          apiKeyEnv: maskSecret(provider.apiKeyEnv)
+        }
+      ])
+    )
+  };
+}
+
+function modelTags(providerId: string, model: string, provider: ModelMuleConfig['providers'][string]): string[] {
+  const lower = model.toLowerCase();
+  const tags = new Set<string>();
+  if (provider.isLocal || provider.type === 'ollama' || provider.baseUrl?.includes('localhost') || provider.baseUrl?.includes('127.0.0.1')) {
+    tags.add('local');
+    tags.add('free');
+  }
+  if (lower.includes(':free') || lower.includes('/free') || lower.endsWith('-free')) tags.add('free');
+  if (lower.includes('coder') || lower.includes('code') || lower.includes('codex')) tags.add('coding');
+  if (lower.includes('reason') || lower.includes('r1') || lower.includes('o1') || lower.includes('o3')) tags.add('reasoning');
+  if (lower.includes('flash') || lower.includes('mini') || lower.includes('small') || lower.includes('8b')) tags.add('fast');
+  if (lower.includes('cheap') || tags.has('free')) tags.add('cheap');
+  if (lower.includes('beta') || lower.includes('preview') || lower.includes('experimental')) tags.add('experimental');
+  if (!tags.has('free') && !tags.has('local')) tags.add('paid');
+  return [...tags];
+}
+
+const providerPresets: ProviderPreset[] = [
+  { id: 'openrouter', name: 'OpenRouter', type: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1', apiKeyEnv: 'OPENROUTER_API_KEY', model: 'openrouter/auto' },
+  { id: 'openai', name: 'OpenAI API', type: 'openai_compatible', baseUrl: 'https://api.openai.com/v1', apiKeyEnv: 'OPENAI_API_KEY', model: 'gpt-4.1-mini' },
+  { id: 'anthropic', name: 'Anthropic Claude API', type: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', model: 'claude-3-5-sonnet-latest' },
+  { id: 'gemini', name: 'Google Gemini API', type: 'openai_compatible', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', apiKeyEnv: 'GEMINI_API_KEY', model: 'gemini-1.5-flash' },
+  { id: 'mistral', name: 'Mistral API', type: 'openai_compatible', baseUrl: 'https://api.mistral.ai/v1', apiKeyEnv: 'MISTRAL_API_KEY', model: 'mistral-small-latest' },
+  { id: 'groq', name: 'Groq API', type: 'openai_compatible', baseUrl: 'https://api.groq.com/openai/v1', apiKeyEnv: 'GROQ_API_KEY', model: 'llama-3.1-8b-instant' },
+  { id: 'deepseek', name: 'DeepSeek API', type: 'openai_compatible', baseUrl: 'https://api.deepseek.com/v1', apiKeyEnv: 'DEEPSEEK_API_KEY', model: 'deepseek-chat' },
+  { id: 'ollama', name: 'Ollama lokal', type: 'ollama', baseUrl: 'http://127.0.0.1:11434', model: 'llama3.1:8b', isLocal: true },
+  { id: 'lm_studio', name: 'LM Studio lokal', type: 'openai_compatible', baseUrl: 'http://127.0.0.1:1234/v1', model: 'local-model', isLocal: true },
+  { id: 'chatgpt_account', name: 'ChatGPT Account-Abo', type: 'account_placeholder', note: 'Nur Hinweisbereich. Keine Cookie-, Scraping- oder inoffizielle Account-Automation.' },
+  { id: 'claude_max_account', name: 'Claude Max Abo', type: 'account_placeholder', note: 'Nur Hinweisbereich. Keine Cookie-, Scraping- oder inoffizielle Account-Automation.' }
+];
+
+function presetProviderId(presetId: string): string {
+  const aliases: Record<string, string> = {
+    openrouter: 'openrouter_main',
+    ollama: 'ollama_local',
+    lm_studio: 'lm_studio_local'
+  };
+  return aliases[presetId] ?? `${presetId}_main`;
+}
+
+function inferEnvName(providerId: string): string {
+  const normalized = providerId.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return `MODELMULE_${normalized || 'PROVIDER'}_API_KEY`;
+}
+
+function setupStatus(config: ModelMuleConfig) {
+  const providers = Object.entries(config.providers ?? {}).filter(([, provider]) => provider.enabled !== false);
+  const readyProviderIds = providers
+    .filter(([, provider]) => !provider.apiKeyEnv || Boolean(process.env[provider.apiKeyEnv]))
+    .map(([providerId]) => providerId);
+  const missingSecretProviderIds = providers
+    .filter(([, provider]) => provider.apiKeyEnv && !process.env[provider.apiKeyEnv])
+    .map(([providerId]) => providerId);
+  const connectedToolIds = CODING_AI_DEFINITIONS
+    .filter((tool) => providers.some(([, provider]) => provider.type === 'shell_command' && provider.command === tool.command))
+    .map((tool) => tool.id);
+  const assignedToolIds = Object.entries(config.codingAiTools ?? {})
+    .filter(([, assignment]) => assignment.enabled !== false && assignment.routingProfileId)
+    .map(([toolId]) => toolId);
+  const installedToolIds = CODING_AI_DEFINITIONS.filter((tool) => commandPath(tool.command)).map((tool) => tool.id);
+
+  return {
+    endpoint: 'http://127.0.0.1:43110/v1',
+    providersTotal: providers.length,
+    readyProviderIds,
+    missingSecretProviderIds,
+    installedToolIds,
+    connectedToolIds,
+    assignedToolIds,
+    routingProfilesTotal: Object.keys(config.routingProfiles ?? {}).length,
+    modelsTotal: Object.keys(config.models ?? {}).length,
+    steps: [
+      {
+        id: 'provider',
+        label: 'KI-Anbieter eingerichtet',
+        done: readyProviderIds.length > 0,
+        detail: readyProviderIds.length > 0 ? `${readyProviderIds.length} Anbieter bereit` : 'Waehle OpenRouter, Ollama oder einen anderen Anbieter.'
+      },
+      {
+        id: 'tool',
+        label: 'Coding-AI verbunden',
+        done: connectedToolIds.length > 0 || assignedToolIds.length > 0,
+        detail: connectedToolIds.length > 0 ? `${connectedToolIds.length} Tool verbunden` : 'Waehle Codex, OpenCode, Aider oder Claude Code.'
+      },
+      {
+        id: 'routing',
+        label: 'Routing-Profil gewaehlt',
+        done: assignedToolIds.length > 0,
+        detail: assignedToolIds.length > 0 ? `${assignedToolIds.length} Zuweisung aktiv` : 'Free First ist fuer den Start empfohlen.'
+      },
+      {
+        id: 'test',
+        label: 'Chat-Test bereit',
+        done: providers.length > 0,
+        detail: 'Sende danach eine Testfrage im Chat-Test.'
+      }
+    ]
+  };
+}
 
 function getBearerToken(header: string | undefined): string | undefined {
   const [scheme, token] = header?.split(/\s+/, 2) ?? [];
@@ -240,13 +509,401 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
     providerTypes: ProviderTypeSchema.options,
     providerTemplates: ProviderTemplateTypeSchema.options,
     routingModes: RoutingModeSchema.options,
-    taskTypes: TaskTypeSchema.options
+    taskTypes: TaskTypeSchema.options,
+    providerPresets
   }));
 
+  app.get('/provider-presets', routeRateLimit, async () => ({ presets: providerPresets }));
+  app.get('/setup/status', routeRateLimit, async () => setupStatus(config));
+  app.post('/setup/quickstart', routeRateLimit, async (request, reply) => {
+    try {
+      const body = SetupQuickstartRequestSchema.parse(request.body);
+      const preset = providerPresets.find((item) => item.id === body.presetId);
+      if (!preset) {
+        reply.code(404);
+        return {
+          error: {
+            message: `Provider preset '${body.presetId}' does not exist`,
+            type: 'not_found'
+          }
+        };
+      }
+      if (!ProviderTypeSchema.safeParse(preset.type).success) {
+        reply.code(400);
+        return {
+          error: {
+            message: `${preset.name} kann nicht automatisch verbunden werden. Nutze dafuer die Hinweise im Expertenbereich.`,
+            type: 'validation_error'
+          }
+        };
+      }
+
+      const providerId = body.providerId ?? presetProviderId(preset.id);
+      const existingProvider = config.providers[providerId];
+      const apiKeyEnv = existingProvider?.apiKeyEnv ?? preset.apiKeyEnv ?? inferEnvName(providerId);
+      const provider = ProviderConfigSchema.parse({
+        type: preset.type,
+        enabled: true,
+        displayName: preset.name,
+        baseUrl: preset.baseUrl,
+        apiKeyEnv: preset.isLocal ? undefined : apiKeyEnv,
+        priority: preset.isLocal ? 60 : 80,
+        models: preset.model ? [preset.model] : [],
+        isLocal: preset.isLocal
+      });
+
+      if (body.apiKey?.trim() && provider.apiKeyEnv) {
+        process.env[provider.apiKeyEnv] = body.apiKey.trim();
+      }
+
+      const routingProfileId = body.routingProfileId ?? 'free_first';
+      const currentProfile = config.routingProfiles?.[routingProfileId];
+      const nextRoutingProfiles = currentProfile
+        ? {
+            ...(config.routingProfiles ?? {}),
+            [routingProfileId]: {
+              ...currentProfile,
+              providerOrder: [providerId, ...currentProfile.providerOrder.filter((id) => id !== providerId)],
+              modelPreferences: preset.model
+                ? {
+                    ...currentProfile.modelPreferences,
+                    [providerId]: [preset.model]
+                  }
+                : currentProfile.modelPreferences
+            }
+          }
+        : config.routingProfiles;
+      const currentCodingPrefer = config.routing.tasks.coding?.prefer ?? [];
+      const nextCodingPrefer = [providerId, ...currentCodingPrefer.filter((id) => id !== providerId)];
+      const nextModels = preset.model
+        ? {
+            ...(config.models ?? {}),
+            [`${providerId}:${preset.model}`]: ModelCatalogEntrySchema.parse({
+              providerId,
+              model: preset.model,
+              enabled: true,
+              tags: modelTags(providerId, preset.model, provider)
+            })
+          }
+        : config.models;
+      const nextCodingAiTools = body.codingToolId
+        ? {
+            ...(config.codingAiTools ?? {}),
+            [body.codingToolId]: {
+              ...(config.codingAiTools?.[body.codingToolId] ?? {}),
+              enabled: true,
+              routingProfileId
+            }
+          }
+        : config.codingAiTools;
+
+      const nextConfig = applyConfig({
+        ...config,
+        providers: {
+          ...config.providers,
+          [providerId]: provider
+        },
+        models: nextModels,
+        routingProfiles: nextRoutingProfiles,
+        codingAiTools: nextCodingAiTools,
+        routing: {
+          ...config.routing,
+          tasks: {
+            ...config.routing.tasks,
+            coding: {
+              prefer: nextCodingPrefer
+            }
+          }
+        }
+      });
+
+      return {
+        providerId,
+        apiKeyEnv: provider.apiKeyEnv,
+        routingProfileId,
+        codingToolId: body.codingToolId,
+        status: setupStatus(nextConfig),
+        config: safeConfig(nextConfig)
+      };
+    } catch (error) {
+      reply.code(400);
+      return errorResponse(error);
+    }
+  });
+
   app.get('/providers', routeRateLimit, async () => ({ providers: await service.listProviders() }));
+  app.get('/models/catalog', routeRateLimit, async () => {
+    const providerModels = await service.listModels();
+    const entries = providerModels.flatMap(({ providerId, models }) => {
+      const provider = config.providers[providerId];
+      if (!provider) {
+        return [];
+      }
+      return models.map((model) => {
+        const key = `${providerId}:${model}`;
+        const configured = config.models?.[key];
+        const tags = configured?.tags?.length ? configured.tags : modelTags(providerId, model, provider);
+        return {
+          id: key,
+          providerId,
+          providerName: provider.displayName ?? providerId,
+          model,
+          enabled: configured?.enabled ?? true,
+          tags,
+          free: tags.includes('free'),
+          local: tags.includes('local'),
+          coding: tags.includes('coding'),
+          reasoning: tags.includes('reasoning')
+        };
+      });
+    });
+    return { models: entries };
+  });
+  app.post('/models/catalog/update', routeRateLimit, async (request, reply) => {
+    try {
+      const body = ModelCatalogUpdateRequestSchema.parse(request.body);
+      const [providerId, ...modelParts] = body.id.split(':');
+      const model = modelParts.join(':');
+      const provider = config.providers[providerId];
+      if (!provider || !model) {
+        reply.code(404);
+        return {
+          error: {
+            message: `Model '${body.id}' does not exist`,
+            type: 'not_found'
+          }
+        };
+      }
+
+      const current = config.models?.[body.id];
+      return {
+        path: configPath,
+        config: safeConfig(
+          applyConfig({
+            ...config,
+            models: {
+              ...(config.models ?? {}),
+              [body.id]: ModelCatalogEntrySchema.parse({
+                providerId,
+                model,
+                enabled: body.enabled,
+                tags: current?.tags?.length ? current.tags : modelTags(providerId, model, provider),
+                notes: current?.notes
+              })
+            }
+          })
+        )
+      };
+    } catch (error) {
+      reply.code(400);
+      return errorResponse(error);
+    }
+  });
+  app.get('/routing/profiles', routeRateLimit, async () => ({ profiles: config.routingProfiles ?? {}, assignments: config.codingAiTools ?? {} }));
+  app.post('/routing/profile', routeRateLimit, async (request, reply) => {
+    try {
+      const body = RoutingProfileUpsertRequestSchema.parse(request.body);
+      return {
+        path: configPath,
+        config: safeConfig(
+          applyConfig({
+            ...config,
+            routingProfiles: {
+              ...(config.routingProfiles ?? {}),
+              [body.id]: body.profile
+            }
+          })
+        )
+      };
+    } catch (error) {
+      reply.code(400);
+      return errorResponse(error);
+    }
+  });
+  app.post('/tools/coding-ai/assign', routeRateLimit, async (request, reply) => {
+    try {
+      const body = CodingAiAssignmentRequestSchema.parse(request.body);
+      return {
+        path: configPath,
+        config: safeConfig(
+          applyConfig({
+            ...config,
+            codingAiTools: {
+              ...(config.codingAiTools ?? {}),
+              [body.toolId]: body.assignment
+            }
+          })
+        )
+      };
+    } catch (error) {
+      reply.code(400);
+      return errorResponse(error);
+    }
+  });
+  app.get('/tools/coding-ai', routeRateLimit, async () => {
+    const providers = config.providers ?? {};
+    return {
+      tools: CODING_AI_DEFINITIONS.map((tool) => {
+        const path = commandPath(tool.command);
+        const configuredProviders = Object.entries(providers)
+          .filter(([, provider]) => provider.type === 'shell_command' && provider.command === tool.command)
+          .map(([id]) => id);
+
+        return {
+          id: tool.id,
+          name: tool.name,
+          description: tool.description,
+          command: tool.command,
+          installed: Boolean(path),
+          commandPath: path,
+          version: path ? commandVersion(tool.command) : undefined,
+          installMethods: Object.keys(tool.installMethods),
+          defaultProviderId: tool.defaultProviderId,
+          configuredProviders,
+          assignment: config.codingAiTools?.[tool.id]
+        };
+      })
+    };
+  });
+  app.post('/tools/coding-ai/install', routeRateLimit, async (request, reply) => {
+    try {
+      const body = CodingAiInstallRequestSchema.parse(request.body);
+      const tool = findCodingAi(body.toolId);
+      if (!tool) {
+        reply.code(404);
+        return {
+          error: {
+            message: `Unknown coding AI tool '${body.toolId}'`,
+            type: 'not_found'
+          }
+        };
+      }
+
+      const selectedMethod = body.method && tool.installMethods[body.method] ? body.method : Object.keys(tool.installMethods)[0];
+      const command = tool.installMethods[selectedMethod];
+      if (!command || command.length === 0) {
+        reply.code(400);
+        return {
+          error: {
+            message: `No install command configured for '${tool.id}'`,
+            type: 'validation_error'
+          }
+        };
+      }
+
+      const run = spawnSync(command[0], command.slice(1), {
+        encoding: 'utf8',
+        timeout: 300_000
+      });
+      const path = commandPath(tool.command);
+
+      return {
+        toolId: tool.id,
+        method: selectedMethod,
+        command: command.join(' '),
+        exitCode: run.status,
+        stdout: run.stdout,
+        stderr: run.stderr,
+        installed: Boolean(path),
+        commandPath: path
+      };
+    } catch (error) {
+      reply.code(400);
+      return errorResponse(error);
+    }
+  });
+  app.post('/tools/coding-ai/connect', routeRateLimit, async (request, reply) => {
+    try {
+      const body = CodingAiConnectRequestSchema.parse(request.body);
+      const tool = findCodingAi(body.toolId);
+      if (!tool) {
+        reply.code(404);
+        return {
+          error: {
+            message: `Unknown coding AI tool '${body.toolId}'`,
+            type: 'not_found'
+          }
+        };
+      }
+
+      const providerId = body.providerId ?? tool.defaultProviderId;
+      const provider = {
+        type: 'shell_command' as const,
+        enabled: true,
+        command: tool.command,
+        args: tool.defaultArgs,
+        timeoutMs: 600_000,
+        priority: 65,
+        models: [tool.defaultModel],
+        isLocal: true
+      };
+
+      const currentCodingPrefer = config.routing.tasks.coding?.prefer ?? [];
+      const nextCodingPrefer = currentCodingPrefer.includes(providerId)
+        ? currentCodingPrefer
+        : [...currentCodingPrefer, providerId];
+
+      applyConfig({
+        ...config,
+        providers: {
+          ...config.providers,
+          [providerId]: provider
+        },
+        routing: {
+          ...config.routing,
+          tasks: {
+            ...config.routing.tasks,
+            coding: {
+              prefer: nextCodingPrefer
+            }
+          }
+        }
+      });
+
+      return {
+        providerId,
+        toolId: tool.id,
+        configPath
+      };
+    } catch (error) {
+      reply.code(400);
+      return errorResponse(error);
+    }
+  });
+  app.post('/providers/secret', routeRateLimit, async (request, reply) => {
+    try {
+      const body = ProviderSecretRequestSchema.parse(request.body);
+      const provider = config.providers[body.id];
+      if (!provider) {
+        reply.code(404);
+        return {
+          error: {
+            message: `Provider '${body.id}' does not exist`,
+            type: 'not_found'
+          }
+        };
+      }
+
+      if (!provider.apiKeyEnv) {
+        reply.code(400);
+        return {
+          error: {
+            message: `Provider '${body.id}' does not use apiKeyEnv`,
+            type: 'validation_error'
+          }
+        };
+      }
+
+      process.env[provider.apiKeyEnv] = body.apiKey.trim();
+      return { id: body.id, apiKeyEnv: provider.apiKeyEnv, configured: true };
+    } catch (error) {
+      reply.code(400);
+      return errorResponse(error);
+    }
+  });
   app.get('/models', routeRateLimit, async () => ({ models: await service.listModels() }));
   app.get('/usage', routeRateLimit, async () => service.getUsage());
-  app.get('/config', routeRateLimit, async () => ({ path: configPath, config }));
+  app.get('/config', routeRateLimit, async () => ({ path: configPath, config: safeConfig(config) }));
   app.get('/profiles/export', routeRateLimit, async (request) => {
     const query = request.query as { providers?: string; name?: string };
     const providerIds = query.providers
@@ -262,7 +919,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
         rawBody && typeof rawBody === 'object' && 'profile' in rawBody
           ? ProfileImportRequestSchema.parse(rawBody)
           : { profile: ProviderProfileSchema.parse(rawBody), replace: false };
-      return { path: configPath, config: applyConfig(importProviderProfile(config, body.profile, { replace: body.replace })) };
+      return { path: configPath, config: safeConfig(applyConfig(importProviderProfile(config, body.profile, { replace: body.replace }))) };
     } catch (error) {
       reply.code(400);
       return errorResponse(error);
@@ -274,7 +931,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
     try {
       const body = RestoreConfigRequestSchema.parse(request.body);
       restoreConfigBackup(body.name, options.configPath);
-      return { path: configPath, config: reloadConfig() };
+      return { path: configPath, config: safeConfig(reloadConfig()) };
     } catch (error) {
       reply.code(400);
       return errorResponse(error);
@@ -283,7 +940,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
   app.put('/config', routeRateLimit, async (request, reply) => {
     try {
       const nextConfig = ModelMuleConfigSchema.parse(request.body);
-      return { path: configPath, config: applyConfig(nextConfig) };
+      return { path: configPath, config: safeConfig(applyConfig(nextConfig)) };
     } catch (error) {
       reply.code(400);
       return errorResponse(error);
@@ -292,7 +949,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
 
   app.post('/config/reload', routeRateLimit, async (_request, reply) => {
     try {
-      return { path: configPath, config: reloadConfig() };
+      return { path: configPath, config: safeConfig(reloadConfig()) };
     } catch (error) {
       reply.code(400);
       return errorResponse(error);
@@ -320,13 +977,13 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
 
       return {
         path: configPath,
-        config: applyConfig({
+        config: safeConfig(applyConfig({
           ...config,
           providers: {
             ...config.providers,
             [body.id]: provider
           }
-        })
+        }))
       };
     } catch (error) {
       reply.code(400);
@@ -360,14 +1017,14 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
 
       return {
         path: configPath,
-        config: applyConfig({
+        config: safeConfig(applyConfig({
           ...config,
           providers,
           routing: {
             ...config.routing,
             tasks
           }
-        })
+        }))
       };
     } catch (error) {
       reply.code(400);
@@ -380,10 +1037,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
       const routing = RoutingConfigSchema.parse(request.body);
       return {
         path: configPath,
-        config: applyConfig({
+        config: safeConfig(applyConfig({
           ...config,
           routing
-        })
+        }))
       };
     } catch (error) {
       reply.code(400);
@@ -394,11 +1051,16 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
   app.post('/v1/chat/completions', routeRateLimit, async (request, reply) => {
     try {
       const body = ChatCompletionRequestSchema.parse(request.body);
+      const codingToolHeader = request.headers['x-modelmule-tool'];
+      const codingTool = Array.isArray(codingToolHeader) ? codingToolHeader[0] : codingToolHeader;
       const routed = await service.chat({
         model: body.model,
         messages: body.messages as ChatMessage[],
         taskType: body.taskType,
-        metadata: body.metadata
+        metadata: {
+          ...(body.metadata ?? {}),
+          ...(codingTool ? { codingTool } : {})
+        }
       });
 
       return toOpenAIResponse({
@@ -408,7 +1070,9 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
         promptTokens: routed.response.usage.promptTokens,
         completionTokens: routed.response.usage.completionTokens,
         usedProvider: routed.usedProvider,
-        fallbackChain: routed.fallbackChain
+        fallbackChain: routed.fallbackChain,
+        routingProfileId: routed.routingProfileId,
+        codingTool: routed.codingTool
       });
     } catch (error) {
       if (error instanceof ZodError) {

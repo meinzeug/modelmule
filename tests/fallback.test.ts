@@ -29,8 +29,8 @@ describe('fallback behavior', () => {
   it('falls back to next provider on error', async () => {
     const config = defaultConfig();
     config.providers = {
-      first: { type: 'openrouter', priority: 90, models: ['first-model'], apiKeyEnv: 'OPENROUTER_API_KEY' },
-      second: { type: 'ollama', priority: 50, models: ['second-model'], isLocal: true }
+      first: { type: 'openrouter', enabled: true, priority: 90, models: ['first-model'], apiKeyEnv: 'OPENROUTER_API_KEY' },
+      second: { type: 'ollama', enabled: true, priority: 50, models: ['second-model'], isLocal: true }
     };
     config.routing.tasks.coding = { prefer: ['first', 'second'] };
 

@@ -42,6 +42,8 @@ export const ProviderTemplateTypeSchema = z.enum([
 
 export const ProviderConfigSchema = z.object({
   type: ProviderTypeSchema,
+  enabled: z.boolean().default(true),
+  displayName: z.string().optional(),
   apiKeyEnv: z.string().optional(),
   baseUrl: z.string().optional(),
   dailyRequestLimit: z.number().int().positive().optional(),
@@ -54,6 +56,26 @@ export const ProviderConfigSchema = z.object({
   isLocal: z.boolean().optional()
 });
 
+export const ModelCapabilityTagSchema = z.enum([
+  'free',
+  'paid',
+  'local',
+  'fast',
+  'strong',
+  'cheap',
+  'coding',
+  'reasoning',
+  'experimental'
+]);
+
+export const ModelCatalogEntrySchema = z.object({
+  providerId: z.string().min(1),
+  model: z.string().min(1),
+  enabled: z.boolean().default(true),
+  tags: z.array(ModelCapabilityTagSchema).default([]),
+  notes: z.string().optional()
+});
+
 export const RoutingTaskConfigSchema = z.object({
   prefer: z.array(z.string()).default([])
 });
@@ -64,12 +86,33 @@ export const RoutingConfigSchema = z.object({
   tasks: z.record(z.string(), RoutingTaskConfigSchema).default({})
 });
 
+export const RoutingProfileSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  mode: RoutingModeSchema.default('balanced'),
+  providerOrder: z.array(z.string()).default([]),
+  modelPreferences: z.record(z.array(z.string())).default({}),
+  allowPaid: z.boolean().default(true),
+  localOnly: z.boolean().default(false),
+  maxCostUsdPerRequest: z.number().nonnegative().optional()
+});
+
+export const CodingAiToolConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  routingProfileId: z.string().optional(),
+  providerId: z.string().optional(),
+  notes: z.string().optional()
+});
+
 export const CURRENT_CONFIG_SCHEMA_VERSION = 1;
 
 export const ModelMuleConfigSchema = z.object({
   schemaVersion: z.number().int().positive().default(CURRENT_CONFIG_SCHEMA_VERSION),
   providers: z.record(z.string(), ProviderConfigSchema),
-  routing: RoutingConfigSchema.default({ defaultMode: 'balanced', privacyMode: false, tasks: {} })
+  models: z.record(z.string(), ModelCatalogEntrySchema).default({}),
+  routing: RoutingConfigSchema.default({ defaultMode: 'balanced', privacyMode: false, tasks: {} }),
+  routingProfiles: z.record(z.string(), RoutingProfileSchema).default({}),
+  codingAiTools: z.record(z.string(), CodingAiToolConfigSchema).default({})
 });
 
 export const ProviderProfileSchema = z.object({
@@ -81,9 +124,11 @@ export const ProviderProfileSchema = z.object({
 });
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
+export type ModelCatalogEntry = z.infer<typeof ModelCatalogEntrySchema>;
 export type ProviderType = z.infer<typeof ProviderTypeSchema>;
 export type ProviderTemplateType = z.infer<typeof ProviderTemplateTypeSchema>;
 export type RoutingConfig = z.infer<typeof RoutingConfigSchema>;
+export type RoutingProfile = z.infer<typeof RoutingProfileSchema>;
 export type ModelMuleConfig = z.infer<typeof ModelMuleConfigSchema>;
 export type ProviderProfile = z.infer<typeof ProviderProfileSchema>;
 
@@ -108,6 +153,7 @@ export function providerTemplate(type: ProviderTemplateType): ProviderConfig {
     case 'openrouter':
       return {
         type,
+        enabled: true,
         apiKeyEnv: 'OPENROUTER_API_KEY',
         priority: 70,
         models: ['openrouter/auto']
@@ -115,6 +161,7 @@ export function providerTemplate(type: ProviderTemplateType): ProviderConfig {
     case 'ollama':
       return {
         type,
+        enabled: true,
         baseUrl: 'http://127.0.0.1:11434',
         priority: 60,
         models: ['llama3.1:8b'],
@@ -123,6 +170,7 @@ export function providerTemplate(type: ProviderTemplateType): ProviderConfig {
     case 'openai_compatible':
       return {
         type,
+        enabled: true,
         baseUrl: 'https://api.openai.com/v1',
         apiKeyEnv: 'OPENAI_API_KEY',
         priority: 75,
@@ -131,6 +179,7 @@ export function providerTemplate(type: ProviderTemplateType): ProviderConfig {
     case 'anthropic':
       return {
         type,
+        enabled: true,
         apiKeyEnv: 'ANTHROPIC_API_KEY',
         priority: 75,
         models: ['claude-3-5-sonnet-latest']
@@ -138,6 +187,7 @@ export function providerTemplate(type: ProviderTemplateType): ProviderConfig {
     case 'shell_command':
       return {
         type,
+        enabled: true,
         command: '/bin/cat',
         args: [],
         timeoutMs: 120_000,
@@ -148,6 +198,7 @@ export function providerTemplate(type: ProviderTemplateType): ProviderConfig {
     case 'codex_cli':
       return {
         type: 'shell_command',
+        enabled: true,
         command: 'codex',
         args: ['exec', '-'],
         timeoutMs: 600_000,
@@ -158,6 +209,7 @@ export function providerTemplate(type: ProviderTemplateType): ProviderConfig {
     case 'claude_cli':
       return {
         type: 'shell_command',
+        enabled: true,
         command: 'claude',
         args: ['-p'],
         timeoutMs: 600_000,
@@ -173,6 +225,8 @@ export const defaultConfig = (): ModelMuleConfig => ({
   providers: {
     openrouter_main: {
       type: 'openrouter',
+      enabled: true,
+      displayName: 'OpenRouter',
       apiKeyEnv: 'OPENROUTER_API_KEY',
       dailyRequestLimit: 1000,
       dailyBudgetUsd: 2,
@@ -181,6 +235,8 @@ export const defaultConfig = (): ModelMuleConfig => ({
     },
     ollama_local: {
       type: 'ollama',
+      enabled: true,
+      displayName: 'Ollama lokal',
       baseUrl: 'http://127.0.0.1:11434',
       priority: 60,
       models: ['llama3.1:8b'],
@@ -195,6 +251,69 @@ export const defaultConfig = (): ModelMuleConfig => ({
       'cheap-chat': { prefer: ['openrouter_main', 'ollama_local'] },
       'local-private': { prefer: ['ollama_local'] }
     }
+  },
+  models: {
+    'openrouter_main:openrouter/auto': {
+      providerId: 'openrouter_main',
+      model: 'openrouter/auto',
+      enabled: true,
+      tags: ['coding', 'cheap']
+    },
+    'openrouter_main:openrouter/free': {
+      providerId: 'openrouter_main',
+      model: 'openrouter/free',
+      enabled: true,
+      tags: ['free', 'cheap', 'coding']
+    },
+    'ollama_local:llama3.1:8b': {
+      providerId: 'ollama_local',
+      model: 'llama3.1:8b',
+      enabled: true,
+      tags: ['local', 'free', 'coding']
+    }
+  },
+  routingProfiles: {
+    free_first: {
+      name: 'Free First',
+      description: 'Kostenlose und lokale Modelle zuerst, danach gunstige Cloud-Provider.',
+      mode: 'free-first',
+      providerOrder: ['openrouter_main', 'ollama_local'],
+      modelPreferences: {
+        openrouter_main: ['openrouter/free', 'openrouter/auto'],
+        ollama_local: ['llama3.1:8b']
+      },
+      allowPaid: true,
+      localOnly: false
+    },
+    only_free: {
+      name: 'Nur kostenlos',
+      description: 'Nur lokale oder als kostenlos markierte Modelle.',
+      mode: 'free-first',
+      providerOrder: ['ollama_local', 'openrouter_main'],
+      modelPreferences: {
+        ollama_local: ['llama3.1:8b'],
+        openrouter_main: ['openrouter/free']
+      },
+      allowPaid: false,
+      localOnly: false
+    },
+    best_quality: {
+      name: 'Beste Qualitat',
+      description: 'Starkere Modelle bevorzugen, Kosten sind zweitrangig.',
+      mode: 'premium',
+      providerOrder: ['openrouter_main', 'ollama_local'],
+      modelPreferences: {
+        openrouter_main: ['openrouter/auto']
+      },
+      allowPaid: true,
+      localOnly: false
+    }
+  },
+  codingAiTools: {
+    codex: { enabled: true, routingProfileId: 'free_first' },
+    opencode: { enabled: true, routingProfileId: 'only_free' },
+    aider: { enabled: true, routingProfileId: 'free_first' },
+    claude_code: { enabled: true, routingProfileId: 'best_quality' }
   }
 });
 
@@ -323,7 +442,49 @@ export function loadConfig(configPath?: string): ModelMuleConfig {
   }
   const raw = readFileSync(path, 'utf8');
   const parsed = YAML.parse(raw);
-  return ModelMuleConfigSchema.parse(parsed);
+  return normalizeInlineSecrets(applyRuntimeDefaults(ModelMuleConfigSchema.parse(parsed)));
+}
+
+function applyRuntimeDefaults(config: ModelMuleConfig): ModelMuleConfig {
+  const defaults = defaultConfig();
+  return ModelMuleConfigSchema.parse({
+    ...config,
+    models: Object.keys(config.models ?? {}).length > 0 ? config.models : defaults.models,
+    routingProfiles: Object.keys(config.routingProfiles ?? {}).length > 0 ? config.routingProfiles : defaults.routingProfiles,
+    codingAiTools: Object.keys(config.codingAiTools ?? {}).length > 0 ? config.codingAiTools : defaults.codingAiTools
+  });
+}
+
+function looksLikeInlineSecret(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  return /^(sk-|sk_|or-|eyJ|AIza|xai-|gsk_|mistral-|deepseek-)/i.test(value) || value.length > 48;
+}
+
+function normalizeInlineSecrets(config: ModelMuleConfig): ModelMuleConfig {
+  const providers = Object.fromEntries(
+    Object.entries(config.providers).map(([providerId, provider]) => {
+      if (!looksLikeInlineSecret(provider.apiKeyEnv)) {
+        return [providerId, provider];
+      }
+
+      const envName = `MODELMULE_${providerId.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_API_KEY`;
+      process.env[envName] = provider.apiKeyEnv;
+      return [
+        providerId,
+        {
+          ...provider,
+          apiKeyEnv: envName
+        }
+      ];
+    })
+  );
+
+  return ModelMuleConfigSchema.parse({
+    ...config,
+    providers
+  });
 }
 
 export function saveConfig(config: ModelMuleConfig, configPath?: string, options: { backup?: boolean } = {}): string {

@@ -50,6 +50,7 @@ export interface RouteDecision {
   orderedProviders: string[];
   mode: string;
   taskType: TaskType;
+  routingProfileId?: string;
 }
 
 export interface RoutePreviewProvider {
