@@ -10,6 +10,7 @@
     "dev": "tsx src/index.ts"
   },
   "dependencies": {
+    "@fastify/rate-limit": "10.3.0",
     "@modelmule/config": "workspace:*",
     "@modelmule/core": "workspace:*",
     "@modelmule/providers": "workspace:*",

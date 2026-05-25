@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance } from 'fastify';
+import rateLimit from '@fastify/rate-limit';
 import { loadConfig } from '@modelmule/config';
 import { ModelMuleService, UsageStore, type ChatMessage } from '@modelmule/core';
 import { createProvider } from '@modelmule/providers';
@@ -59,29 +60,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
   const app = Fastify({ logger: false });
   const rateLimitWindowMs = Number(process.env.MODELMULE_RATE_LIMIT_WINDOW_MS ?? 60_000);
   const rateLimitMaxRequests = Number(process.env.MODELMULE_RATE_LIMIT_MAX_REQUESTS ?? 120);
-  const rateLimitState = new Map<string, { windowStart: number; count: number }>();
-
-  app.addHook('onRequest', async (request, reply) => {
-    if (request.url === '/health') {
-      return;
-    }
-    const key = request.ip;
-    const now = Date.now();
-    const current = rateLimitState.get(key);
-    if (!current || now - current.windowStart >= rateLimitWindowMs) {
-      rateLimitState.set(key, { windowStart: now, count: 1 });
-      return;
-    }
-    if (current.count >= rateLimitMaxRequests) {
-      reply.code(429).send({
-        error: {
-          message: 'Too many requests',
-          type: 'rate_limit_exceeded'
-        }
-      });
-      return;
-    }
-    current.count += 1;
+  await app.register(rateLimit, {
+    max: rateLimitMaxRequests,
+    timeWindow: rateLimitWindowMs,
+    keyGenerator: (request) => request.ip
   });
 
   app.get('/health', async () => ({ status: 'ok' }));
