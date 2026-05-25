@@ -116,12 +116,22 @@ export class ModelMuleService {
   inspectRoute(request: Pick<ChatRequest, 'taskType' | 'metadata'>): RoutePreview {
     const taskType = this.normalizeTaskType(request.taskType);
     const codingTool = this.resolveCodingTool(request.metadata);
+    const excludedProviderIds = this.resolveExcludedProviderIds(request.metadata);
     const routingProfileId = this.resolveRoutingProfileId(codingTool);
     const decision = this.routing.decide(taskType, this.options.providers, routingProfileId);
     const providers: RoutePreviewProvider[] = [];
     let selectedProvider: string | undefined;
 
     for (const providerId of decision.orderedProviders) {
+      if (excludedProviderIds.has(providerId)) {
+        providers.push({
+          providerId,
+          available: false,
+          reason: 'excluded-provider'
+        });
+        continue;
+      }
+
       const provider = this.options.providers[providerId];
       if (!provider) {
         providers.push({
@@ -265,6 +275,17 @@ export class ModelMuleService {
   private resolveCodingTool(metadata: Record<string, unknown> | undefined): string | undefined {
     const candidate = metadata?.codingTool ?? metadata?.tool ?? metadata?.client;
     return typeof candidate === 'string' && candidate.trim().length > 0 ? candidate.trim() : undefined;
+  }
+
+  private resolveExcludedProviderIds(metadata: Record<string, unknown> | undefined): Set<string> {
+    const raw = metadata?.excludeProviderIds ?? metadata?.blockedProviderIds;
+    if (Array.isArray(raw)) {
+      return new Set(raw.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim()));
+    }
+    if (typeof raw === 'string' && raw.trim().length > 0) {
+      return new Set([raw.trim()]);
+    }
+    return new Set();
   }
 
   private resolveRoutingProfileId(codingTool: string | undefined): string | undefined {

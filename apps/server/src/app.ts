@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import rateLimit from '@fastify/rate-limit';
@@ -197,12 +197,145 @@ function toResponsesApiResponse(input: {
   };
 }
 
+function toCodexModelInfo(providerId: string, model: string) {
+  return {
+    id: model,
+    slug: model,
+    display_name: model,
+    description: null,
+    default_reasoning_level: null,
+    supported_reasoning_levels: [],
+    shell_type: 'default',
+    visibility: 'list',
+    supported_in_api: true,
+    priority: 0,
+    additional_speed_tiers: [],
+    service_tiers: [],
+    default_service_tier: null,
+    availability_nux: null,
+    upgrade: null,
+    base_instructions: 'You are Codex, a coding agent routed through ModelMule.',
+    model_messages: null,
+    supports_reasoning_summaries: false,
+    default_reasoning_summary: 'auto',
+    support_verbosity: false,
+    default_verbosity: null,
+    apply_patch_tool_type: null,
+    web_search_tool_type: 'text',
+    truncation_policy: {
+      mode: 'bytes',
+      limit: 10_000
+    },
+    supports_parallel_tool_calls: false,
+    supports_image_detail_original: false,
+    context_window: 272_000,
+    max_context_window: 272_000,
+    auto_compact_token_limit: null,
+    effective_context_window_percent: 95,
+    experimental_supported_tools: [],
+    input_modalities: ['text'],
+    supports_search_tool: false,
+    object: 'model',
+    created: 0,
+    owned_by: providerId
+  };
+}
+
+function sendResponsesStream(reply: { raw: NodeJS.WritableStream & { setHeader(name: string, value: string): void; statusCode: number } }, response: ReturnType<typeof toResponsesApiResponse>) {
+  const message = response.output[0];
+  const content = message.content[0];
+  const writeEvent = (event: string, data: unknown) => {
+    reply.raw.write(`event: ${event}\n`);
+    reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  reply.raw.statusCode = 200;
+  reply.raw.setHeader('content-type', 'text/event-stream; charset=utf-8');
+  reply.raw.setHeader('cache-control', 'no-cache');
+  reply.raw.setHeader('connection', 'keep-alive');
+  reply.raw.setHeader('x-accel-buffering', 'no');
+
+  writeEvent('response.created', {
+    type: 'response.created',
+    response: {
+      ...response,
+      status: 'in_progress',
+      output: [],
+      output_text: ''
+    }
+  });
+  writeEvent('response.in_progress', {
+    type: 'response.in_progress',
+    response: {
+      ...response,
+      status: 'in_progress',
+      output: [],
+      output_text: ''
+    }
+  });
+  writeEvent('response.output_item.added', {
+    type: 'response.output_item.added',
+    output_index: 0,
+    item: {
+      ...message,
+      status: 'in_progress',
+      content: []
+    }
+  });
+  writeEvent('response.content_part.added', {
+    type: 'response.content_part.added',
+    item_id: message.id,
+    output_index: 0,
+    content_index: 0,
+    part: {
+      ...content,
+      text: ''
+    }
+  });
+  writeEvent('response.output_text.delta', {
+    type: 'response.output_text.delta',
+    item_id: message.id,
+    output_index: 0,
+    content_index: 0,
+    delta: response.output_text
+  });
+  writeEvent('response.output_text.done', {
+    type: 'response.output_text.done',
+    item_id: message.id,
+    output_index: 0,
+    content_index: 0,
+    text: response.output_text
+  });
+  writeEvent('response.content_part.done', {
+    type: 'response.content_part.done',
+    item_id: message.id,
+    output_index: 0,
+    content_index: 0,
+    part: content
+  });
+  writeEvent('response.output_item.done', {
+    type: 'response.output_item.done',
+    output_index: 0,
+    item: message
+  });
+  writeEvent('response.completed', {
+    type: 'response.completed',
+    response
+  });
+  reply.raw.end();
+}
+
 export interface BuildServerOptions {
   configPath?: string;
   dbPath?: string;
   apiKey?: string;
   codexConfigPath?: string;
+  secretsPath?: string;
 }
+
+const SecretsFileSchema = z.object({
+  env: z.record(z.string()).default({})
+});
 
 const providerIdPattern = /^[A-Za-z0-9_-]+$/;
 const ProviderIdSchema = z.string().trim().regex(providerIdPattern, 'Provider id must contain only letters, numbers, underscores, and dashes');
@@ -221,6 +354,7 @@ const ResponsesRequestSchema = z
     model: z.string().min(1).optional(),
     input: z.unknown().optional(),
     instructions: z.string().optional(),
+    stream: z.boolean().optional(),
     metadata: z.record(z.unknown()).optional()
   })
   .passthrough()
@@ -453,6 +587,55 @@ function inferEnvName(providerId: string): string {
   return `MODELMULE_${normalized || 'PROVIDER'}_API_KEY`;
 }
 
+function resolveSecretsPath(configPath?: string, secretsPath?: string): string {
+  return secretsPath ?? process.env.MODELMULE_SECRETS_PATH ?? join(dirname(resolveConfigPath(configPath)), 'secrets.json');
+}
+
+function readSecretsFile(path: string): { env: Record<string, string> } {
+  if (!existsSync(path)) {
+    return { env: {} };
+  }
+  const raw = readFileSync(path, 'utf8');
+  return SecretsFileSchema.parse(JSON.parse(raw));
+}
+
+function writeSecretsFile(path: string, secrets: { env: Record<string, string> }): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(SecretsFileSchema.parse(secrets), null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  chmodSync(path, 0o600);
+}
+
+function loadPersistentSecrets(config: ModelMuleConfig, secretsPath: string): void {
+  const secrets = readSecretsFile(secretsPath);
+  const envNames = new Set(Object.values(config.providers).map((provider) => provider.apiKeyEnv).filter((envName): envName is string => Boolean(envName)));
+  for (const envName of envNames) {
+    const value = secrets.env[envName];
+    if (value && !process.env[envName]) {
+      process.env[envName] = value;
+    }
+  }
+}
+
+function persistProviderSecret(secretsPath: string, envName: string, apiKey: string): void {
+  const secrets = readSecretsFile(secretsPath);
+  writeSecretsFile(secretsPath, {
+    env: {
+      ...secrets.env,
+      [envName]: apiKey
+    }
+  });
+}
+
+function removeProviderSecret(secretsPath: string, envName: string): void {
+  const secrets = readSecretsFile(secretsPath);
+  if (!(envName in secrets.env)) {
+    return;
+  }
+  const env = { ...secrets.env };
+  delete env[envName];
+  writeSecretsFile(secretsPath, { env });
+}
+
 function resolveCodexConfigPath(configPath?: string): string {
   if (configPath) {
     return configPath;
@@ -504,7 +687,49 @@ function withoutTomlTable(content: string, tableName: string): string {
   return result.join('\n');
 }
 
-function upsertCodexModelMuleProvider(configPath?: string): { path: string; backupPath?: string; providerId: string; model: string } {
+function codexModelFromConfig(config: ModelMuleConfig, routingProfileId?: string): string {
+  const profile = routingProfileId ? config.routingProfiles?.[routingProfileId] : undefined;
+  const preferredProviderIds = [
+    ...(profile?.providerOrder ?? []),
+    ...(config.routing.tasks.coding?.prefer ?? []),
+    ...Object.keys(config.providers ?? {})
+  ];
+  const uniqueProviderIds = [...new Set(preferredProviderIds)];
+
+  for (const providerId of uniqueProviderIds) {
+    const provider = config.providers[providerId];
+    if (!provider || provider.enabled === false || provider.type === 'shell_command' || provider.apiKeyEnv && !process.env[provider.apiKeyEnv]) {
+      continue;
+    }
+    const profileModel = profile?.modelPreferences?.[providerId]?.[0];
+    const providerModel = provider.models?.[0];
+    if (profileModel || providerModel) {
+      return profileModel ?? providerModel;
+    }
+  }
+
+  for (const provider of Object.values(config.providers ?? {})) {
+    if (provider.enabled !== false && provider.type !== 'shell_command' && (!provider.apiKeyEnv || process.env[provider.apiKeyEnv]) && provider.models?.[0]) {
+      return provider.models[0];
+    }
+  }
+
+  for (const provider of Object.values(config.providers ?? {})) {
+    if (provider.enabled !== false && provider.isLocal && provider.models?.[0]) {
+      return provider.models[0];
+    }
+  }
+
+  for (const provider of Object.values(config.providers ?? {})) {
+    if (provider.enabled !== false && provider.type !== 'shell_command' && provider.models?.[0]) {
+      return provider.models[0];
+    }
+  }
+
+  return 'openrouter/auto';
+}
+
+function upsertCodexModelMuleProvider(configPath?: string, model = 'openrouter/auto'): { path: string; backupPath?: string; providerId: string; model: string } {
   const path = resolveCodexConfigPath(configPath);
   const existing = existsSync(path) ? readFileSync(path, 'utf8') : '';
   const dir = dirname(path);
@@ -517,7 +742,6 @@ function upsertCodexModelMuleProvider(configPath?: string): { path: string; back
   }
 
   const providerId = 'modelmule';
-  const model = 'openrouter/auto';
   const cleaned = withoutTomlTable(withoutTopLevelKeys(existing, ['model_provider', 'model']), `model_providers.${providerId}`).trim();
   const modelMuleBlock = [
     '# Added by ModelMule. Codex will send model requests to the local ModelMule router.',
@@ -546,7 +770,7 @@ function setupStatus(config: ModelMuleConfig) {
     .filter(([, provider]) => provider.apiKeyEnv && !process.env[provider.apiKeyEnv])
     .map(([providerId]) => providerId);
   const connectedToolIds = CODING_AI_DEFINITIONS
-    .filter((tool) => providers.some(([, provider]) => provider.type === 'shell_command' && provider.command === tool.command))
+    .filter((tool) => providers.some(([, provider]) => provider.type === 'shell_command' && provider.command === tool.command) || config.codingAiTools?.[tool.id]?.enabled !== false && Boolean(config.codingAiTools?.[tool.id]))
     .map((tool) => tool.id);
   const assignedToolIds = Object.entries(config.codingAiTools ?? {})
     .filter(([, assignment]) => assignment.enabled !== false && assignment.routingProfileId)
@@ -626,8 +850,10 @@ function errorResponse(error: unknown, type = 'validation_error') {
 
 export async function buildServer(options: BuildServerOptions = {}): Promise<{ app: FastifyInstance; service: ModelMuleService }> {
   const configPath = resolveConfigPath(options.configPath);
+  const secretsPath = resolveSecretsPath(options.configPath, options.secretsPath);
   const apiKey = options.apiKey ?? process.env.MODELMULE_API_KEY;
   let config = loadConfig(options.configPath);
+  loadPersistentSecrets(config, secretsPath);
   const store = new UsageStore(options.dbPath);
   let service = createService(config, store);
   const app = Fastify({ logger: false });
@@ -641,6 +867,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
 
   function reloadConfig(): ModelMuleConfig {
     config = loadConfig(options.configPath);
+    loadPersistentSecrets(config, secretsPath);
     service = createService(config, store);
     return config;
   }
@@ -771,7 +998,9 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
       });
 
       if (body.apiKey?.trim() && provider.apiKeyEnv) {
-        process.env[provider.apiKeyEnv] = body.apiKey.trim();
+        const apiKey = body.apiKey.trim();
+        process.env[provider.apiKeyEnv] = apiKey;
+        persistProviderSecret(secretsPath, provider.apiKeyEnv, apiKey);
       }
 
       const routingProfileId = body.routingProfileId ?? 'free_first';
@@ -814,7 +1043,16 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
             }
           }
         : config.codingAiTools;
-      const codexConfig = body.codingToolId === 'codex' ? upsertCodexModelMuleProvider(options.codexConfigPath) : undefined;
+      const codexConfig = body.codingToolId === 'codex' ? upsertCodexModelMuleProvider(options.codexConfigPath, codexModelFromConfig({
+        ...config,
+        providers: {
+          ...config.providers,
+          [providerId]: provider
+        },
+        routingProfiles: nextRoutingProfiles,
+        models: nextModels,
+        codingAiTools: nextCodingAiTools
+      }, routingProfileId)) : undefined;
 
       const nextConfig = applyConfig({
         ...config,
@@ -1046,6 +1284,44 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
         };
       }
 
+      if (tool.id === 'codex') {
+        const removedProviderId = body.providerId ?? tool.defaultProviderId;
+        const providers = { ...config.providers };
+        delete providers[removedProviderId];
+        const codingPrefer = (config.routing.tasks.coding?.prefer ?? []).filter((id) => id !== removedProviderId);
+        const routingProfileId = config.codingAiTools?.codex?.routingProfileId ?? 'free_first';
+        const nextConfig = applyConfig({
+          ...config,
+          providers,
+          codingAiTools: {
+            ...(config.codingAiTools ?? {}),
+            codex: {
+              ...(config.codingAiTools?.codex ?? {}),
+              enabled: true,
+              routingProfileId
+            }
+          },
+          routing: {
+            ...config.routing,
+            tasks: {
+              ...config.routing.tasks,
+              coding: {
+                prefer: codingPrefer
+              }
+            }
+          }
+        });
+        const codexConfig = upsertCodexModelMuleProvider(options.codexConfigPath, codexModelFromConfig(nextConfig, routingProfileId));
+
+        return {
+          providerId: 'modelmule',
+          toolId: tool.id,
+          codexConfig,
+          status: setupStatus(nextConfig),
+          configPath
+        };
+      }
+
       const providerId = body.providerId ?? tool.defaultProviderId;
       const provider = {
         type: 'shell_command' as const,
@@ -1079,12 +1355,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
           }
         }
       });
-      const codexConfig = tool.id === 'codex' ? upsertCodexModelMuleProvider(options.codexConfigPath) : undefined;
 
       return {
         providerId,
         toolId: tool.id,
-        codexConfig,
         status: setupStatus(nextConfig),
         configPath
       };
@@ -1117,7 +1391,9 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
         };
       }
 
-      process.env[provider.apiKeyEnv] = body.apiKey.trim();
+      const apiKey = body.apiKey.trim();
+      process.env[provider.apiKeyEnv] = apiKey;
+      persistProviderSecret(secretsPath, provider.apiKeyEnv, apiKey);
       return { id: body.id, apiKeyEnv: provider.apiKeyEnv, configured: true };
     } catch (error) {
       reply.code(400);
@@ -1125,6 +1401,15 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
     }
   });
   app.get('/models', routeRateLimit, async () => ({ models: await service.listModels() }));
+  app.get('/v1/models', routeRateLimit, async () => {
+    const providers = await service.listModels();
+    const models = providers.flatMap((provider) => provider.models.map((model) => toCodexModelInfo(provider.providerId, model)));
+    return {
+      object: 'list',
+      data: models,
+      models
+    };
+  });
   app.get('/usage', routeRateLimit, async () => service.getUsage());
   app.get('/config', routeRateLimit, async () => ({ path: configPath, config: safeConfig(config) }));
   app.get('/profiles/export', routeRateLimit, async (request) => {
@@ -1230,6 +1515,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
       }
 
       const providers = { ...config.providers };
+      if (config.providers[id].apiKeyEnv) {
+        removeProviderSecret(secretsPath, config.providers[id].apiKeyEnv);
+        delete process.env[config.providers[id].apiKeyEnv];
+      }
       delete providers[id];
       const tasks = Object.fromEntries(
         Object.entries(config.routing.tasks).map(([taskType, taskConfig]) => [
@@ -1276,13 +1565,14 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
       const body = ChatCompletionRequestSchema.parse(request.body);
       const codingToolHeader = request.headers['x-modelmule-tool'];
       const codingTool = Array.isArray(codingToolHeader) ? codingToolHeader[0] : codingToolHeader;
+      const excludedProviderIds = codingTool ? [findCodingAi(codingTool)?.defaultProviderId].filter((providerId): providerId is string => Boolean(providerId)) : [];
       const routed = await service.chat({
         model: body.model,
         messages: body.messages as ChatMessage[],
         taskType: body.taskType,
         metadata: {
           ...(body.metadata ?? {}),
-          ...(codingTool ? { codingTool } : {})
+          ...(codingTool ? { codingTool, excludeProviderIds: excludedProviderIds.length ? excludedProviderIds : undefined } : {})
         }
       });
 
@@ -1323,17 +1613,20 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
 
       const codingToolHeader = request.headers['x-modelmule-tool'];
       const codingTool = Array.isArray(codingToolHeader) ? codingToolHeader[0] : codingToolHeader;
+      const effectiveCodingTool = codingTool ?? 'codex';
+      const excludedProviderIds = [findCodingAi(effectiveCodingTool)?.defaultProviderId].filter((providerId): providerId is string => Boolean(providerId));
       const routed = await service.chat({
         model: body.model,
         messages,
         taskType: 'coding',
         metadata: {
           ...(body.metadata ?? {}),
-          ...(codingTool ? { codingTool } : { codingTool: 'codex' })
+          codingTool: effectiveCodingTool,
+          excludeProviderIds: excludedProviderIds
         }
       });
 
-      return toResponsesApiResponse({
+      const response = toResponsesApiResponse({
         id: routed.response.id,
         model: routed.response.model,
         content: routed.response.content,
@@ -1344,6 +1637,13 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<{ a
         routingProfileId: routed.routingProfileId,
         codingTool: routed.codingTool
       });
+
+      if (body.stream) {
+        sendResponsesStream(reply, response);
+        return reply;
+      }
+
+      return response;
     } catch (error) {
       if (error instanceof ZodError) {
         reply.code(400);

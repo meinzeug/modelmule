@@ -56,7 +56,7 @@ export interface RouteDecision {
 export interface RoutePreviewProvider {
   providerId: string;
   available: boolean;
-  reason: 'eligible' | 'privacy-mode' | 'budget-limit-reached' | 'daily-request-limit-reached' | 'missing-provider';
+  reason: 'eligible' | 'privacy-mode' | 'budget-limit-reached' | 'daily-request-limit-reached' | 'missing-provider' | 'excluded-provider';
 }
 
 export interface RoutePreview extends RouteDecision {

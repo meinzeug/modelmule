@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -80,6 +80,72 @@ describe('openai compatible endpoint', () => {
     expect(body.metadata.modelmule.usedProvider).toBe('shell_local');
   });
 
+  it('returns OpenAI style model list for Codex discovery', async () => {
+    const response = await setup.app.inject({
+      method: 'GET',
+      url: '/v1/models?client_version=0.133.0'
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.object).toBe('list');
+    expect(body.models[0]).toMatchObject({
+      id: 'shell-model',
+      slug: 'shell-model',
+      display_name: 'shell-model',
+      supported_reasoning_levels: [],
+      shell_type: 'default',
+      visibility: 'list',
+      supported_in_api: true,
+      priority: 0,
+      object: 'model',
+      created: 0,
+      owned_by: 'shell_local'
+    });
+    expect(body.models[0]).toMatchObject({
+      base_instructions: expect.any(String),
+      description: null,
+      default_reasoning_level: null,
+      additional_speed_tiers: [],
+      service_tiers: [],
+      availability_nux: null,
+      upgrade: null,
+      model_messages: null,
+      supports_reasoning_summaries: false,
+      default_reasoning_summary: 'auto',
+      support_verbosity: false,
+      default_verbosity: null,
+      apply_patch_tool_type: null,
+      web_search_tool_type: 'text',
+      truncation_policy: {
+        mode: 'bytes',
+        limit: 10000
+      },
+      supports_parallel_tool_calls: false,
+      supports_image_detail_original: false,
+      context_window: 272000,
+      max_context_window: 272000,
+      auto_compact_token_limit: null,
+      effective_context_window_percent: 95,
+      experimental_supported_tools: [],
+      input_modalities: ['text'],
+      supports_search_tool: false
+    });
+    expect(body.data[0]).toMatchObject({
+      id: 'shell-model',
+      slug: 'shell-model',
+      display_name: 'shell-model',
+      supported_reasoning_levels: [],
+      shell_type: 'default',
+      visibility: 'list',
+      supported_in_api: true,
+      priority: 0,
+      object: 'model',
+      created: 0,
+      owned_by: 'shell_local'
+    });
+  });
+
   it('returns Responses API style output for Codex custom providers', async () => {
     const response = await setup.app.inject({
       method: 'POST',
@@ -109,6 +175,24 @@ describe('openai compatible endpoint', () => {
     });
     expect(body.output_text).toContain('hello from codex');
     expect(body.metadata.modelmule.codingTool).toBe('codex');
+  });
+
+  it('streams Responses API events through response.completed for Codex', async () => {
+    const response = await setup.app.inject({
+      method: 'POST',
+      url: '/v1/responses',
+      payload: {
+        model: 'openrouter/auto',
+        stream: true,
+        input: 'hello streaming codex'
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/event-stream');
+    expect(response.body).toContain('event: response.output_text.delta');
+    expect(response.body).toContain('event: response.completed');
+    expect(response.body).toContain('hello streaming codex');
   });
 
   it('returns model catalog entries with free/local tags', async () => {
@@ -345,15 +429,108 @@ describe('openai compatible endpoint', () => {
     expect(body.codexConfig).toMatchObject({
       path: codexConfigPath,
       providerId: 'modelmule',
-      model: 'openrouter/auto'
+      model: 'shell-model'
     });
 
     const codexConfig = readFileSync(codexConfigPath, 'utf8');
     expect(codexConfig).toContain('model_provider = "modelmule"');
-    expect(codexConfig).toContain('model = "openrouter/auto"');
+    expect(codexConfig).toContain('model = "shell-model"');
     expect(codexConfig).toContain('[model_providers.modelmule]');
     expect(codexConfig).toContain('base_url = "http://127.0.0.1:43110/v1"');
     expect(codexConfig).toContain('wire_api = "responses"');
+
+    const configResponse = await setup.app.inject({
+      method: 'GET',
+      url: '/config'
+    });
+    expect(configResponse.statusCode).toBe(200);
+    expect(configResponse.json().config.routing.tasks.coding.prefer).not.toContain('codex_cli');
+  });
+
+  it('persists provider API keys across server restarts', async () => {
+    const envName = 'MODELMULE_PERSIST_TEST_API_KEY';
+    delete process.env[envName];
+    const persistentConfigPath = join(tempDir, 'persistent-config.yaml');
+    const persistentDbPath = join(tempDir, 'persistent-usage.db');
+    const persistentSecretsPath = join(tempDir, 'persistent-secrets.json');
+    saveConfig({
+      ...testConfig,
+      providers: {
+        persistent_openrouter: {
+          type: 'openrouter',
+          enabled: true,
+          apiKeyEnv: envName,
+          priority: 75,
+          models: ['openrouter/free']
+        }
+      },
+      routing: {
+        defaultMode: 'balanced',
+        privacyMode: false,
+        tasks: {
+          coding: { prefer: ['persistent_openrouter'] }
+        }
+      }
+    }, persistentConfigPath);
+
+    const firstServer = await buildServer({ configPath: persistentConfigPath, dbPath: persistentDbPath, secretsPath: persistentSecretsPath });
+    const secretResponse = await firstServer.app.inject({
+      method: 'POST',
+      url: '/providers/secret',
+      payload: {
+        id: 'persistent_openrouter',
+        apiKey: 'persisted-test-key'
+      }
+    });
+
+    expect(secretResponse.statusCode).toBe(200);
+    expect(secretResponse.json()).not.toHaveProperty('apiKey');
+    expect(readFileSync(persistentSecretsPath, 'utf8')).toContain('persisted-test-key');
+    expect(statSync(persistentSecretsPath).mode & 0o777).toBe(0o600);
+    await firstServer.app.close();
+    delete process.env[envName];
+
+    const secondServer = await buildServer({ configPath: persistentConfigPath, dbPath: join(tempDir, 'persistent-usage-restart.db'), secretsPath: persistentSecretsPath });
+    const statusResponse = await secondServer.app.inject({
+      method: 'GET',
+      url: '/setup/status'
+    });
+
+    expect(statusResponse.statusCode).toBe(200);
+    expect(statusResponse.json().readyProviderIds).toContain('persistent_openrouter');
+    const deleteResponse = await secondServer.app.inject({
+      method: 'DELETE',
+      url: '/config/provider/persistent_openrouter'
+    });
+    expect(deleteResponse.statusCode).toBe(200);
+    expect(readFileSync(persistentSecretsPath, 'utf8')).not.toContain('persisted-test-key');
+    await secondServer.app.close();
+    delete process.env[envName];
+  });
+
+  it('does not route Codex Responses requests back into the Codex CLI provider', async () => {
+    await setup.app.inject({
+      method: 'POST',
+      url: '/tools/coding-ai/connect',
+      payload: {
+        toolId: 'codex'
+      }
+    });
+
+    const response = await setup.app.inject({
+      method: 'POST',
+      url: '/v1/responses',
+      payload: {
+        model: 'openrouter/auto',
+        input: 'make sure codex does not call itself'
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.metadata.modelmule.codingTool).toBe('codex');
+    expect(body.metadata.modelmule.usedProvider).not.toBe('codex_cli');
+    expect(body.metadata.modelmule.fallbackChain).not.toContain('codex_cli');
   });
 
   it('creates a config backup before server-side config writes', async () => {
