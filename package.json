@@ -1,0 +1,27 @@
+{
+  "name": "modelmule",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local AI routing layer for coding tools",
+  "packageManager": "pnpm@10.22.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "git clean -fdX",
+    "lint": "tsc -b --pretty false",
+    "test": "vitest run",
+    "dev:server": "pnpm --filter @modelmule/server dev",
+    "dev:cli": "pnpm --filter @modelmule/cli dev"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "24.10.1",
+    "@types/supertest": "6.0.3",
+    "supertest": "7.1.4",
+    "tsx": "4.20.3",
+    "typescript": "5.9.2",
+    "vitest": "3.2.4"
+  }
+}
